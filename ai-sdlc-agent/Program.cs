@@ -4,6 +4,27 @@ using AiSdlcAgent.Plugins;
 using Microsoft.Extensions.Configuration;
 using Microsoft.SemanticKernel;
 
+static void LoadDotEnv(string path = ".env")
+{
+    if (!File.Exists(path)) return;
+
+    foreach (var rawLine in File.ReadAllLines(path))
+    {
+        var line = rawLine.Trim();
+        if (string.IsNullOrWhiteSpace(line) || line.StartsWith("#"))
+            continue;
+
+        var idx = line.IndexOf('=');
+        if (idx <= 0) continue;
+
+        var key = line[..idx].Trim();
+        var value = line[(idx + 1)..].Trim().Trim('"');
+        Environment.SetEnvironmentVariable(key, value);
+    }
+}
+
+LoadDotEnv();
+
 var config = new ConfigurationBuilder()
     .AddJsonFile("appsettings.json", optional: false)
     .AddEnvironmentVariables()
@@ -11,6 +32,11 @@ var config = new ConfigurationBuilder()
 
 var model = config["OpenAI:Model"]!;
 var apiKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY") ?? config["OpenAI:ApiKey"]!;
+
+if (string.IsNullOrWhiteSpace(apiKey))
+{
+    throw new InvalidOperationException("OpenAI API key is missing. Set OPENAI_API_KEY in .env or environment variables.");
+}
 
 var builder = Kernel.CreateBuilder();
 builder.AddOpenAIChatCompletion(model, apiKey);
