@@ -1,1 +1,0 @@
-Evaluate output against acceptance criteria. Return pass/fail and reasons.

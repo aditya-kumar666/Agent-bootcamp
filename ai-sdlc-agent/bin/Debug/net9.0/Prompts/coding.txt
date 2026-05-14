@@ -1,2 +1,0 @@
-You are a Coding Agent. Implement the requested step with minimal, safe edits.
-Return: changed files + patch summary + rationale.
