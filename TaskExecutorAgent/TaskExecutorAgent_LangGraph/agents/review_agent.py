@@ -18,8 +18,22 @@ class ReviewAgent(BaseAgent):
         """
         try:
             prompt = self.read_prompt("review.txt")
+            
+            # Add tools context if available
+            tools_context = ""
+            if self.tool_registry:
+                tools_context = f"\n\n{self.get_tools_context()}"
+            
+            # Enhanced prompt with tools
+            enhanced_prompt = f"{prompt}{tools_context}"
+            
             user_input = f"{prompt}\n\nTask: {task}\n\nInput: {input_context}"
-            return self.invoke(prompt, user_input)
+            
+            # Use tool-enabled invoke if tools are available
+            if self.tool_registry:
+                return self.invoke_with_tools(enhanced_prompt, user_input, max_iterations=3)
+            else:
+                return self.invoke(enhanced_prompt, user_input)
         except Exception as ex:
             return self.get_fallback_response(task, ex)
 

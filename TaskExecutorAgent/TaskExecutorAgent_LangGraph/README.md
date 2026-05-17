@@ -532,3 +532,50 @@ See `requirements.txt`:
 ## 📝 License & Attribution
 
 This is a Python implementation of the AI SDLC Agent pattern, inspired by tools like Cursor, Claude Code, Devin, and Copilot Workspace.
+
+---
+
+## 🔧 Tool Calling and Execution Flow
+
+This project supports **agentic tool calling** using the ReAct pattern (**Think → Act → Observe**).
+
+### Tool Components
+- **`plugins/tool_registry.py`**: Registers tools and exposes tool metadata/descriptions.
+- **`plugins/tool_executor.py`**: Parses tool-call text and executes the mapped callable.
+- **`plugins/agentic_loop.py`**: Iterative reasoning loop for tool usage.
+- **`plugins/file_tools.py`** / **`plugins/test_tools.py`**: Concrete tool implementations.
+
+### High-Level Flow
+1. Agent receives task + context.
+2. Agent prompt includes available tools (name, purpose, params).
+3. LLM responds with either:
+   - final answer, or
+   - tool action like: `Action: file_tools.read_file(path=models/user.py)`
+4. Tool executor parses action and resolves it via registry.
+5. Tool function is executed and result is captured.
+6. Result is appended back into conversation context.
+7. LLM continues next iteration until no more tool actions.
+
+### Runtime Call Path (Typical)
+- `CodingAgent.execute(...)` / `ReviewAgent.review(...)`
+  → `BaseAgent.invoke_with_tools(...)`
+  → parse action
+  → `ToolExecutor.execute_tool(...)`
+  → mapped plugin method (e.g., `FileToolsPlugin.read_file(...)`)
+  → observation returned to LLM
+  → final response.
+
+### Supported Action Formats
+- ReAct style: `Action: tool_name(arg=value)`
+- JSON style: `{"tool": "tool_name", "args": {...}}`
+- Markdown fenced tool payloads.
+
+### Example
+```text
+Thought: I should inspect existing model structure.
+Action: file_tools.read_file(path=models/user.py)
+Observation: <file contents>
+Thought: I can now generate a compatible update.
+```
+
+This keeps agents grounded in real workspace state and improves output quality.
