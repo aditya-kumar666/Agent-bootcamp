@@ -5,6 +5,7 @@ import os
 import sys
 from pathlib import Path
 from typing import TypedDict
+import re
 
 from dotenv import load_dotenv
 from langgraph.graph import StateGraph, END
@@ -21,6 +22,82 @@ from plugins import FileToolsPlugin, TestToolsPlugin, ToolRegistry, ToolExecutor
 
 BASE_DIR = Path(__file__).resolve().parent
 PROMPTS_DIR = BASE_DIR / "prompts"
+
+
+def _extract_file_blocks_from_output(coding_output: str) -> dict[str, str]:
+    """Best-effort extraction of generated file blocks from agent markdown output."""
+    files: dict[str, str] = {}
+
+    def _store_file(path: str, content: str) -> None:
+        path = path.strip()
+        content = content.strip()
+        if not path or not content:
+            return
+        # If the same file is discovered multiple times, keep the longer block.
+        existing = files.get(path, "")
+        if len(content) >= len(existing):
+            files[path] = content
+
+    # Pattern 1: "Code for `path/to/file.ext`" followed by any fenced code block
+    p1 = re.compile(
+        r"Code for\s+`([^`]+)`(?:[^\n`]*)\n?\s*```[a-zA-Z0-9_+-]*\s*(.*?)```",
+        re.DOTALL | re.IGNORECASE,
+    )
+    for m in p1.finditer(coding_output):
+        rel = m.group(1).strip()
+        content = m.group(2).strip()
+        _store_file(rel, content)
+
+    # Pattern 2: combined block with language comment headers:
+    # // path/file.ext, # path/file.ext, -- path/file.ext
+    # Only split on lines that look like file headers (contain path indicators)
+    for combined in re.finditer(r"```[a-zA-Z0-9_+-]*\s*(.*?)```", coding_output, re.DOTALL | re.IGNORECASE):
+        text = combined.group(1)
+        # Split only on comments that have file path patterns (// File:, # File:, or paths with /)
+        sections = re.split(r"\n\s*(?://|#|--)\s*(?:File:\s*)?([^\n]*?[/\\][^\n]*)\n", "\n" + text)
+        
+        # Reconstruct sections with their headers
+        for i in range(1, len(sections), 2):
+            if i + 1 < len(sections):
+                header = sections[i].strip()
+                body = sections[i + 1].strip()
+                if header and body:
+                    _store_file(header, body)
+
+    return files
+
+
+def _sanitize_relative_output_path(raw_path: str) -> str:
+    """Normalize model-produced file labels into safe relative paths."""
+    p = raw_path.strip().replace("\\", "/")
+    if "(" in p or ")" in p:
+        return ""
+    p = re.sub(r"^[-*\d).\s]+", "", p)  # bullets / numbering
+    p = re.sub(r"^(file|path)\s*:\s*", "", p, flags=re.IGNORECASE)
+    p = p.strip("`\"' ")
+    p = p.lstrip("/")
+    p = re.sub(r"^generated_projects/todo_feature_project/", "", p, flags=re.IGNORECASE)
+    p = re.sub(r"^generated_projects/todo_feature_project/", "", p, flags=re.IGNORECASE)
+    # collapse accidental duplicate slashes
+    p = re.sub(r"/{2,}", "/", p)
+    if p.startswith("generated_projects/") or p.startswith("test_tools.") or p.startswith("file_tools."):
+        return ""
+    return p
+
+
+def _is_complete_csharp_content(path: str, content: str) -> bool:
+    """Heuristic check to avoid materializing truncated C# files."""
+    if not path.lower().endswith(".cs"):
+        return True
+    text = content.strip()
+    if not text:
+        return False
+    if text.count("{") != text.count("}"):
+        return False
+    # Program/main snippets should usually close class and method blocks
+    if path.lower().endswith("program.cs") and "static void Main" in text and not text.rstrip().endswith("}"):
+        return False
+    return True
 
 
 class GraphState(TypedDict, total=False):
@@ -349,9 +426,18 @@ def main():
     # Setup tools
     print("Setting up tool registry...")
     tool_registry = setup_tool_registry()
-    print(f"✓ Registered {len(tool_registry.list_tools())} tools")
+    print(f"[OK] Registered {len(tool_registry.list_tools())} tools")
 
-    task = """Implement a practical C# feature in this repo:
+    output_project_dir = "generated_projects/todo_feature_project"
+
+    task = f"""Implement a practical C# feature in this repo.
+
+IMPORTANT OUTPUT LOCATION RULE:
+- Create all generated files ONLY under: {output_project_dir}
+- Do not write outside that folder.
+- Use file_tools.write_file for every created/updated file.
+
+Requested implementation:
 - Create a file Models/TodoItem.cs with properties: Id (int), Title (string), IsDone (bool), CreatedAtUtc (DateTime).
 - Create a service file Services/TodoService.cs with methods:
   1) Add(string title) -> TodoItem
@@ -359,15 +445,60 @@ def main():
   3) GetAll() -> IReadOnlyList<TodoItem>
 - Add validation: title must be non-empty and <= 100 chars.
 - Add a minimal demo usage snippet for Program.cs.
+
+Path mapping requirement:
+- Models/TodoItem.cs => {output_project_dir}/Models/TodoItem.cs
+- Services/TodoService.cs => {output_project_dir}/Services/TodoService.cs
+- Program.cs snippet => {output_project_dir}/Program.cs
+- Use file_tools.write_file for every created/updated file.
+- If code is shown in markdown output, include file paths clearly so they can be materialized.
+
 Acceptance criteria:
 - Compilable C# code
 - Clear method signatures
 - Handles missing id in MarkDone by returning false
 - Includes brief unit-test suggestions."""
 
+    print(f"Generated project directory: {output_project_dir}")
+    output_dir_path = BASE_DIR / output_project_dir
+    if output_dir_path.exists():
+        import shutil
+        shutil.rmtree(output_dir_path)
+    output_dir_path.mkdir(parents=True, exist_ok=True)
+    print(f"[OK] Ensured output directory exists: {output_dir_path}")
+
     app = build_graph(tool_registry)
     initial: GraphState = {"task": task, "memory": RunMemory()}
     final_state = app.invoke(initial)
+
+    # Safety net: if model claimed completion but didn't actually write files,
+    # extract code blocks and materialize expected files under output folder.
+    extracted = _extract_file_blocks_from_output(final_state.get("code", ""))
+    if extracted:
+        print(f"\nDEBUG: Found {len(extracted)} extracted files", file=sys.stderr)
+        for orig_path, content in extracted.items():
+            rel_path = _sanitize_relative_output_path(orig_path)
+            print(f"DEBUG: Processing {orig_path} -> {rel_path}", file=sys.stderr)
+            
+            if not rel_path:
+                print(f"DEBUG:   Skipping (empty path)", file=sys.stderr)
+                continue
+            
+            is_complete = _is_complete_csharp_content(rel_path, content)
+            print(f"DEBUG:   Is complete: {is_complete}", file=sys.stderr)
+            
+            if not is_complete:
+                print(f"DEBUG:   Skipping (incomplete)", file=sys.stderr)
+                continue
+            
+            # Force all generated output under configured project directory
+            target = output_dir_path / rel_path
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(content + "\n", encoding="utf-8")
+                print(f"DEBUG:   Written to {target}", file=sys.stderr)
+            except Exception as e:
+                print(f"DEBUG:   ERROR writing to {target}: {e}", file=sys.stderr)
 
     print("\n" + "="*50)
     print("=== PLANNER OUTPUT ===")
@@ -390,10 +521,28 @@ Acceptance criteria:
         print("="*50)
         print(final_state.get("reflection", ""))
     
+    # Post-run verification of generated files/folder
+    existing = [
+        str(p.relative_to(BASE_DIR))
+        for p in output_dir_path.rglob("*")
+        if p.is_file()
+    ]
+
     print("\n" + "="*50)
     print("=== EVALUATION OUTPUT ===")
     print("="*50)
     print(final_state.get("evaluation", ""))
+
+    print("\n" + "="*50)
+    print("=== GENERATED PROJECT VERIFICATION ===")
+    print("="*50)
+    print(f"Output folder exists: {output_dir_path.exists()}")
+    if existing:
+        print("Generated files:")
+        for fp in existing:
+            print(f"- {fp}")
+    else:
+        print("No generated files found yet.")
 
 
 if __name__ == "__main__":

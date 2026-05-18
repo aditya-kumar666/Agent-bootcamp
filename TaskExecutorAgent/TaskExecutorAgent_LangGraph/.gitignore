@@ -146,3 +146,6 @@ tmp/
 
 # LangChain/LLM cache files (if applicable)
 .langchain/
+
+# Generated project outputs from tool-enabled runs
+generated_projects/
