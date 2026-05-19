@@ -112,6 +112,87 @@ def _is_complete_code_content(path: str, content: str) -> bool:
     return True
 
 
+def _create_csharp_project_file(output_dir_path: Path) -> bool:
+    """Create a .csproj file for the C# project."""
+    csproj_content = """<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+</Project>
+"""
+    try:
+        csproj_path = output_dir_path / "TodoApp.csproj"
+        csproj_path.write_text(csproj_content, encoding="utf-8")
+        print(f"[OK] Created project file: {csproj_path}", file=sys.stderr)
+        return True
+    except Exception as e:
+        print(f"[ERROR] Failed to create .csproj file: {e}", file=sys.stderr)
+        return False
+
+
+def _build_and_execute_csharp(output_dir_path: Path) -> tuple[bool, str]:
+    """Build and execute the generated C# project.
+    
+    Returns:
+        Tuple of (success: bool, output: str)
+    """
+    import subprocess
+    
+    try:
+        # Change to output directory
+        print(f"\n[BUILD] Compiling C# project...", file=sys.stderr)
+        
+        # Run dotnet build
+        build_result = subprocess.run(
+            ["dotnet", "build", "-c", "Release"],
+            cwd=str(output_dir_path),
+            capture_output=True,
+            text=True,
+            timeout=60
+        )
+        
+        if build_result.returncode != 0:
+            error_msg = build_result.stderr or build_result.stdout
+            print(f"[ERROR] Build failed: {error_msg}", file=sys.stderr)
+            return False, error_msg
+        
+        print(f"[OK] Build successful", file=sys.stderr)
+        
+        # Find the executable
+        exe_path = output_dir_path / "bin" / "Release" / "net9.0" / "TodoApp.exe"
+        if not exe_path.exists():
+            print(f"[ERROR] Executable not found at {exe_path}", file=sys.stderr)
+            return False, "Executable not found after build"
+        
+        # Run the executable
+        print(f"\n[RUN] Executing application...", file=sys.stderr)
+        run_result = subprocess.run(
+            [str(exe_path)],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        
+        output = run_result.stdout
+        if run_result.returncode != 0:
+            error_msg = run_result.stderr or "Unknown error"
+            print(f"[ERROR] Execution failed: {error_msg}", file=sys.stderr)
+            return False, f"Execution error: {error_msg}"
+        
+        print(f"[OK] Execution successful", file=sys.stderr)
+        return True, output
+        
+    except subprocess.TimeoutExpired:
+        return False, "Build or execution timed out"
+    except FileNotFoundError as e:
+        return False, f"dotnet not found. Make sure .NET SDK is installed: {e}"
+    except Exception as e:
+        return False, f"Unexpected error: {e}"
+
+
 class GraphState(TypedDict, total=False):
     task: str
     plan: str
@@ -512,6 +593,24 @@ Acceptance criteria:
             except Exception as e:
                 print(f"DEBUG:   ERROR writing to {target}: {e}", file=sys.stderr)
 
+    # Create project file and execute if C# files were generated
+    generated_files = [
+        str(p.relative_to(BASE_DIR))
+        for p in output_dir_path.rglob("*.cs")
+        if p.is_file()
+    ]
+    
+    execution_output = ""
+    if generated_files:
+        print(f"\nGenerating project file and preparing for execution...", file=sys.stderr)
+        if _create_csharp_project_file(output_dir_path):
+            success, exec_output = _build_and_execute_csharp(output_dir_path)
+            execution_output = f"\n{'='*50}\n=== EXECUTION OUTPUT ===\n{'='*50}\n"
+            if success:
+                execution_output += f"[SUCCESS] Application executed successfully:\n\n{exec_output}"
+            else:
+                execution_output += f"[FAILED] Application execution failed:\n\n{exec_output}"
+
     print("\n" + "="*50)
     print("=== PLANNER OUTPUT ===")
     print("="*50)
@@ -533,6 +632,11 @@ Acceptance criteria:
         print("="*50)
         print(final_state.get("reflection", ""))
     
+    print("\n" + "="*50)
+    print("=== EVALUATION OUTPUT ===")
+    print("="*50)
+    print(final_state.get("evaluation", ""))
+
     # Post-run verification of generated files/folder
     existing = [
         str(p.relative_to(BASE_DIR))
@@ -541,20 +645,29 @@ Acceptance criteria:
     ]
 
     print("\n" + "="*50)
-    print("=== EVALUATION OUTPUT ===")
+    print("=== SUMMARY ===")
     print("="*50)
-    print(final_state.get("evaluation", ""))
-
-    print("\n" + "="*50)
-    print("=== GENERATED PROJECT VERIFICATION ===")
-    print("="*50)
-    print(f"Output folder exists: {output_dir_path.exists()}")
-    if existing:
-        print("Generated files:")
-        for fp in existing:
-            print(f"- {fp}")
+    
+    # Show only generated source files
+    source_files = [f for f in existing if f.endswith((".cs", ".csproj"))]
+    print(f"Generated files: {len(source_files)}")
+    for fp in sorted(source_files):
+        if not any(x in fp for x in ["bin", "obj", ".deps", ".pdb", "runtimeconfig"]):
+            print(f"  ✓ {fp}")
+    
+    # Show evaluation status
+    eval_output = final_state.get("evaluation", "")
+    if "Status: PASS" in eval_output:
+        print("\nEvaluation: [PASS] ✓ Code meets all criteria")
+    elif "Status: FAIL" in eval_output:
+        print("\nEvaluation: [FAIL] ✗ Code needs improvements")
     else:
-        print("No generated files found yet.")
+        # Extract first line or summary
+        first_line = eval_output.split("\n")[0] if eval_output else ""
+        print(f"\nEvaluation: {first_line}")
+
+    if execution_output:
+        print(execution_output)
 
 
 if __name__ == "__main__":
