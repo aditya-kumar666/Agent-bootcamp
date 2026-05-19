@@ -85,18 +85,30 @@ def _sanitize_relative_output_path(raw_path: str) -> str:
     return p
 
 
-def _is_complete_csharp_content(path: str, content: str) -> bool:
-    """Heuristic check to avoid materializing truncated C# files."""
-    if not path.lower().endswith(".cs"):
-        return True
+def _is_complete_code_content(path: str, content: str) -> bool:
+    """Heuristic check to avoid materializing truncated code files (language-agnostic).
+    
+    Checks if code content appears complete by verifying:
+    - Content is not empty
+    - Braces/brackets are balanced
+    - Content ends with a closing brace (for files with code blocks)
+    """
     text = content.strip()
     if not text:
         return False
+    
+    # Check for balanced braces and brackets (works across languages)
     if text.count("{") != text.count("}"):
         return False
-    # Program/main snippets should usually close class and method blocks
-    if path.lower().endswith("program.cs") and "static void Main" in text and not text.rstrip().endswith("}"):
+    if text.count("[") != text.count("]"):
         return False
+    if text.count("(") != text.count(")"):
+        return False
+    
+    # If file contains code blocks, it should end with a closing brace
+    if "{" in text and not text.rstrip().endswith(("}","};")):
+        return False
+    
     return True
 
 
@@ -484,7 +496,7 @@ Acceptance criteria:
                 print(f"DEBUG:   Skipping (empty path)", file=sys.stderr)
                 continue
             
-            is_complete = _is_complete_csharp_content(rel_path, content)
+            is_complete = _is_complete_code_content(rel_path, content)
             print(f"DEBUG:   Is complete: {is_complete}", file=sys.stderr)
             
             if not is_complete:
