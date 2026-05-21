@@ -18,7 +18,7 @@ from agents import (
     EvaluationAgent,
 )
 from memory.run_memory import RunMemory
-from plugins import FileToolsPlugin, TestToolsPlugin, ToolRegistry, ToolExecutor, AgenticLoop
+from plugins import FileToolsPlugin, TestToolsPlugin, ToolRegistry, ToolExecutor, AgenticLoop, BuilderFactory
 
 BASE_DIR = Path(__file__).resolve().parent
 PROMPTS_DIR = BASE_DIR / "prompts"
@@ -112,85 +112,7 @@ def _is_complete_code_content(path: str, content: str) -> bool:
     return True
 
 
-def _create_csharp_project_file(output_dir_path: Path) -> bool:
-    """Create a .csproj file for the C# project."""
-    csproj_content = """<Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup>
-    <OutputType>Exe</OutputType>
-    <TargetFramework>net9.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
-  </PropertyGroup>
-</Project>
-"""
-    try:
-        csproj_path = output_dir_path / "TodoApp.csproj"
-        csproj_path.write_text(csproj_content, encoding="utf-8")
-        print(f"[OK] Created project file: {csproj_path}", file=sys.stderr)
-        return True
-    except Exception as e:
-        print(f"[ERROR] Failed to create .csproj file: {e}", file=sys.stderr)
-        return False
 
-
-def _build_and_execute_csharp(output_dir_path: Path) -> tuple[bool, str]:
-    """Build and execute the generated C# project.
-    
-    Returns:
-        Tuple of (success: bool, output: str)
-    """
-    import subprocess
-    
-    try:
-        # Change to output directory
-        print(f"\n[BUILD] Compiling C# project...", file=sys.stderr)
-        
-        # Run dotnet build
-        build_result = subprocess.run(
-            ["dotnet", "build", "-c", "Release"],
-            cwd=str(output_dir_path),
-            capture_output=True,
-            text=True,
-            timeout=60
-        )
-        
-        if build_result.returncode != 0:
-            error_msg = build_result.stderr or build_result.stdout
-            print(f"[ERROR] Build failed: {error_msg}", file=sys.stderr)
-            return False, error_msg
-        
-        print(f"[OK] Build successful", file=sys.stderr)
-        
-        # Find the executable
-        exe_path = output_dir_path / "bin" / "Release" / "net9.0" / "TodoApp.exe"
-        if not exe_path.exists():
-            print(f"[ERROR] Executable not found at {exe_path}", file=sys.stderr)
-            return False, "Executable not found after build"
-        
-        # Run the executable
-        print(f"\n[RUN] Executing application...", file=sys.stderr)
-        run_result = subprocess.run(
-            [str(exe_path)],
-            capture_output=True,
-            text=True,
-            timeout=30
-        )
-        
-        output = run_result.stdout
-        if run_result.returncode != 0:
-            error_msg = run_result.stderr or "Unknown error"
-            print(f"[ERROR] Execution failed: {error_msg}", file=sys.stderr)
-            return False, f"Execution error: {error_msg}"
-        
-        print(f"[OK] Execution successful", file=sys.stderr)
-        return True, output
-        
-    except subprocess.TimeoutExpired:
-        return False, "Build or execution timed out"
-    except FileNotFoundError as e:
-        return False, f"dotnet not found. Make sure .NET SDK is installed: {e}"
-    except Exception as e:
-        return False, f"Unexpected error: {e}"
 
 
 class GraphState(TypedDict, total=False):
@@ -511,8 +433,13 @@ def validate_environment() -> bool:
     return True
 
 
-def main():
-    """Main entry point for the task executor."""
+def main(language: str = "csharp"):
+    """Main entry point for the task executor.
+    
+    Args:
+        language: Programming language for code generation (default: "csharp")
+                 Supported: csharp, java, python, go
+    """
     if not validate_environment():
         sys.exit(1)
 
@@ -522,8 +449,17 @@ def main():
     print(f"[OK] Registered {len(tool_registry.list_tools())} tools")
 
     output_project_dir = "generated_projects/todo_feature_project"
+    
+    # Map language to code hints
+    language_hints = {
+        "csharp": "C#/.NET",
+        "java": "Java",
+        "python": "Python",
+        "go": "Go",
+    }
+    lang_display = language_hints.get(language.lower(), language)
 
-    task = f"""Implement a practical C# feature in this repo.
+    task = f"""Implement a practical {lang_display} feature in this repo.
 
 IMPORTANT OUTPUT LOCATION RULE:
 - Create all generated files ONLY under: {output_project_dir}
@@ -531,23 +467,23 @@ IMPORTANT OUTPUT LOCATION RULE:
 - Use file_tools.write_file for every created/updated file.
 
 Requested implementation:
-- Create a file Models/TodoItem.cs with properties: Id (int), Title (string), IsDone (bool), CreatedAtUtc (DateTime).
-- Create a service file Services/TodoService.cs with methods:
-  1) Add(string title) -> TodoItem
-  2) MarkDone(int id) -> bool
-  3) GetAll() -> IReadOnlyList<TodoItem>
+- Create a file Models/TodoItem with properties: Id (int), Title (string), IsDone (bool), CreatedAt (timestamp).
+- Create a service file Services/TodoService with methods:
+  1) Add(title) -> TodoItem
+  2) MarkDone(id) -> bool
+  3) GetAll() -> List/Array of TodoItems
 - Add validation: title must be non-empty and <= 100 chars.
-- Add a minimal demo usage snippet for Program.cs.
+- Add a minimal demo usage snippet in the main entry point file.
 
 Path mapping requirement:
-- Models/TodoItem.cs => {output_project_dir}/Models/TodoItem.cs
-- Services/TodoService.cs => {output_project_dir}/Services/TodoService.cs
-- Program.cs snippet => {output_project_dir}/Program.cs
+- Models/TodoItem -> {output_project_dir}/Models/TodoItem (appropriate extension for {lang_display})
+- Services/TodoService -> {output_project_dir}/Services/TodoService (appropriate extension for {lang_display})
+- Main entry point -> {output_project_dir}/Main (appropriate extension for {lang_display})
 - Use file_tools.write_file for every created/updated file.
 - If code is shown in markdown output, include file paths clearly so they can be materialized.
 
 Acceptance criteria:
-- Compilable C# code
+- Compilable/runnable {lang_display} code
 - Clear method signatures
 - Handles missing id in MarkDone by returning false
 - Includes brief unit-test suggestions."""
@@ -593,23 +529,34 @@ Acceptance criteria:
             except Exception as e:
                 print(f"DEBUG:   ERROR writing to {target}: {e}", file=sys.stderr)
 
-    # Create project file and execute if C# files were generated
-    generated_files = [
-        str(p.relative_to(BASE_DIR))
-        for p in output_dir_path.rglob("*.cs")
-        if p.is_file()
-    ]
+    # Setup builder for the target language
+    print(f"\nSetting up {lang_display} builder...", file=sys.stderr)
+    try:
+        builder = BuilderFactory.get_builder(language, output_dir_path)
+    except ValueError as e:
+        print(f"[ERROR] {e}", file=sys.stderr)
+        sys.exit(1)
     
+    # Validate environment
+    if not builder.validate_environment():
+        print(f"[ERROR] {lang_display} environment validation failed", file=sys.stderr)
+        sys.exit(1)
+    
+    # Setup project structure
+    if not builder.setup_project():
+        print(f"[ERROR] Failed to setup {lang_display} project", file=sys.stderr)
+        sys.exit(1)
+    
+    # Build and execute
     execution_output = ""
-    if generated_files:
-        print(f"\nGenerating project file and preparing for execution...", file=sys.stderr)
-        if _create_csharp_project_file(output_dir_path):
-            success, exec_output = _build_and_execute_csharp(output_dir_path)
-            execution_output = f"\n{'='*50}\n=== EXECUTION OUTPUT ===\n{'='*50}\n"
-            if success:
-                execution_output += f"[SUCCESS] Application executed successfully:\n\n{exec_output}"
-            else:
-                execution_output += f"[FAILED] Application execution failed:\n\n{exec_output}"
+    print(f"\nBuilding and executing {lang_display} project...", file=sys.stderr)
+    success, exec_output = builder.build_and_execute()
+    
+    execution_output = f"\n{'='*50}\n=== EXECUTION OUTPUT ===\n{'='*50}\n"
+    if success:
+        execution_output += f"[SUCCESS] Application executed successfully:\n\n{exec_output}"
+    else:
+        execution_output += f"[FAILED] Application execution failed:\n\n{exec_output}"
 
     print("\n" + "="*50)
     print("=== PLANNER OUTPUT ===")
@@ -648,12 +595,12 @@ Acceptance criteria:
     print("=== SUMMARY ===")
     print("="*50)
     
-    # Show only generated source files
-    source_files = [f for f in existing if f.endswith((".cs", ".csproj"))]
+    # Show only generated source files (exclude build artifacts)
+    source_files = [f for f in existing 
+                   if not any(x in f for x in ["bin", "obj", ".deps", ".pdb", "runtimeconfig"])]
     print(f"Generated files: {len(source_files)}")
     for fp in sorted(source_files):
-        if not any(x in fp for x in ["bin", "obj", ".deps", ".pdb", "runtimeconfig"]):
-            print(f"  ✓ {fp}")
+        print(f"  ✓ {fp}")
     
     # Show evaluation status
     eval_output = final_state.get("evaluation", "")
@@ -671,4 +618,30 @@ Acceptance criteria:
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    
+    # Parse command-line arguments
+    language = "csharp"  # default
+    if len(sys.argv) > 1:
+        language = sys.argv[1]
+    
+    # Show usage info
+    if language in ["-h", "--help", "help"]:
+        print("\nMulti-Language Task Executor")
+        print("="*60)
+        print("\nUsage:")
+        print("  python main_with_tools.py [language]")
+        print("\nSupported languages:")
+        print("  csharp (default)  - Generate C#/.NET Todo app")
+        print("  java              - Generate Java Todo app (requires Maven)")
+        print("  python            - Generate Python Todo app")
+        print("  go                - Generate Go Todo app (requires Go SDK)")
+        print("\nExamples:")
+        print("  python main_with_tools.py              # Default C#")
+        print("  python main_with_tools.py java         # Java app")
+        print("  python main_with_tools.py python       # Python app")
+        print("  python main_with_tools.py go           # Go app")
+        print()
+        sys.exit(0)
+    
+    main(language=language)

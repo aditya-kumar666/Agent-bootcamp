@@ -5,6 +5,14 @@ from .test_tools import TestToolsPlugin
 from .tool_registry import ToolRegistry, ToolDefinition
 from .tool_executor import ToolExecutor
 from .agentic_loop import AgenticLoop
+from .project_builder import (
+    ProjectBuilder,
+    CSharpBuilder,
+    JavaBuilder,
+    PythonBuilder,
+    GoBuilder,
+    BuilderFactory,
+)
 
 __all__ = [
     "FileToolsPlugin",
@@ -13,4 +21,10 @@ __all__ = [
     "ToolDefinition",
     "ToolExecutor",
     "AgenticLoop",
+    "ProjectBuilder",
+    "CSharpBuilder",
+    "JavaBuilder",
+    "PythonBuilder",
+    "GoBuilder",
+    "BuilderFactory",
 ]
