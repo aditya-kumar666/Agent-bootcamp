@@ -405,6 +405,68 @@ MAX_RETRIES=5                 # Increase max retries
 
 ---
 
+## 🌍 Multi-Language Code Generation & Execution
+
+The system supports generating and executing code in **multiple programming languages** with **automatic error recovery**:
+
+### **Supported Languages**
+- **C#** (.NET 9.0) - `dotnet` build system
+- **Python** 3.x - Interpreted execution
+- **Java** 11+ - Maven build system
+- **Go** 1.21+ - Native compilation
+
+### **Generate Code for Any Language**
+
+```bash
+# Generate C# TodoApp
+python run_with_tools.py csharp
+
+# Generate Python TodoApp
+python run_with_tools.py python
+
+# Generate Java TodoApp
+python run_with_tools.py java
+
+# Generate Go TodoApp
+python run_with_tools.py go
+```
+
+### **Self-Healing Execution Retry**
+
+When generated code fails to execute, the system automatically:
+1. **Captures the error** from execution
+2. **Regenerates code** by feeding error to CodingAgent
+3. **Retries up to 3 times** until success or max attempts reached
+4. **Cleans build artifacts** between attempts for clean rebuilds
+
+**Example Flow:**
+```
+Generate Code
+    ↓
+Build & Execute (Attempt 1) → FAIL
+    ↓
+Regenerate with error context
+    ↓
+Build & Execute (Attempt 2) → SUCCESS ✓
+```
+
+**Monitor Retry Activity:**
+```bash
+python run_with_tools.py python 2>&1 | grep "RETRY\|ERROR\|REGENERATE"
+```
+
+Output example:
+```
+[RETRY 1/3] Building and executing Python project...
+[ERROR] Execution failed: ModuleNotFoundError: No module named 'Services'
+[REGENERATE] Attempting to fix code (attempt 2/3)...
+[OK] Regenerated and wrote 3 files
+[RETRY 2/3] Building and executing Python project...
+[OK] Execution succeeded on attempt 2
+```
+
+---
+
 ## 🔍 Monitoring & Debugging
 
 ### **View Execution Memory**

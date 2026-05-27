@@ -112,7 +112,125 @@ def _is_complete_code_content(path: str, content: str) -> bool:
     return True
 
 
+def _materialize_files(extracted: dict, output_dir_path: Path) -> int:
+    """Materialize extracted code files to disk.
+    
+    Args:
+        extracted: Dict of {path: content} to write
+        output_dir_path: Target directory
+        
+    Returns:
+        Number of files successfully written
+    """
+    written = 0
+    if extracted:
+        print(f"\nDEBUG: Found {len(extracted)} extracted files", file=sys.stderr, flush=True)
+        for orig_path, content in extracted.items():
+            rel_path = _sanitize_relative_output_path(orig_path)
+            print(f"DEBUG: Processing {orig_path} -> {rel_path}", file=sys.stderr, flush=True)
+            
+            if not rel_path:
+                print(f"DEBUG:   Skipping (empty path)", file=sys.stderr, flush=True)
+                continue
+            
+            is_complete = _is_complete_code_content(rel_path, content)
+            print(f"DEBUG:   Is complete: {is_complete}", file=sys.stderr, flush=True)
+            
+            if not is_complete:
+                print(f"DEBUG:   Skipping (incomplete)", file=sys.stderr, flush=True)
+                continue
+            
+            # Force all generated output under configured project directory
+            target = output_dir_path / rel_path
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(content + "\n", encoding="utf-8")
+                print(f"DEBUG:   Written to {target}", file=sys.stderr, flush=True)
+                written += 1
+            except Exception as e:
+                print(f"DEBUG:   ERROR writing to {target}: {e}", file=sys.stderr, flush=True)
+    return written
 
+
+def _build_with_retry(builder, output_dir_path: Path, task: str, tool_registry: ToolRegistry,
+                       lang_display: str, max_retries: int = 3) -> tuple[bool, str]:
+    """Build and execute with automatic retry on error.
+    
+    When execution fails, feeds error back to coding agent for regeneration.
+    
+    Args:
+        builder: ProjectBuilder instance
+        output_dir_path: Output directory path
+        task: Original task description
+        tool_registry: Tool registry for agent execution
+        lang_display: Language display name for feedback
+        max_retries: Maximum number of retry attempts
+        
+    Returns:
+        Tuple of (success: bool, output: str)
+    """
+    attempt = 0
+    last_error = ""
+    
+    while attempt < max_retries:
+        attempt += 1
+        print(f"\n[RETRY {attempt}/{max_retries}] Building and executing {lang_display} project...", file=sys.stderr, flush=True)
+        
+        success, exec_output = builder.build_and_execute()
+        
+        if success:
+            print(f"[OK] Execution succeeded on attempt {attempt}", file=sys.stderr, flush=True)
+            return True, exec_output
+        
+        # Execution failed - capture error
+        last_error = exec_output
+        error_preview = (exec_output[:300] + "...") if len(exec_output) > 300 else exec_output
+        print(f"[ERROR] Execution failed: {error_preview}", file=sys.stderr, flush=True)
+        
+        if attempt < max_retries:
+            print(f"\n[REGENERATE] Attempting to fix code (attempt {attempt + 1}/{max_retries})...", file=sys.stderr, flush=True)
+            
+            # Create feedback-based coding task
+            fix_task = f"""{task}
+
+PREVIOUS EXECUTION ERROR (attempt {attempt}):
+{last_error}
+
+Please fix the above error and regenerate all files. Ensure:
+1. The code handles all edge cases
+2. All imports are correct  
+3. No syntax errors exist
+4. The application can execute successfully"""
+            
+            # Regenerate code with feedback
+            try:
+                coding_agent = CodingAgent(PROMPTS_DIR, tool_registry)
+                regenerated_code = coding_agent.execute(fix_task, fix_task)
+                
+                # Extract and materialize new files
+                extracted = _extract_file_blocks_from_output(regenerated_code)
+                written = _materialize_files(extracted, output_dir_path)
+                print(f"[OK] Regenerated and wrote {written} files", file=sys.stderr, flush=True)
+                
+                # Clean up build artifacts for next attempt
+                import shutil
+                for pattern in ["bin", "obj", "target", "dist", "__pycache__"]:
+                    artifact_dir = output_dir_path / pattern
+                    if artifact_dir.exists():
+                        try:
+                            shutil.rmtree(artifact_dir)
+                            print(f"[OK] Cleaned {pattern} directory", file=sys.stderr, flush=True)
+                        except:
+                            pass
+                
+            except Exception as e:
+                print(f"[ERROR] Regeneration failed: {e}", file=sys.stderr, flush=True)
+                last_error = str(e)
+        else:
+            print(f"\n[FAILED] Max retries ({max_retries}) exceeded", file=sys.stderr, flush=True)
+            break
+    
+    return False, last_error
 
 
 class GraphState(TypedDict, total=False):
@@ -500,34 +618,9 @@ Acceptance criteria:
     initial: GraphState = {"task": task, "memory": RunMemory()}
     final_state = app.invoke(initial)
 
-    # Safety net: if model claimed completion but didn't actually write files,
-    # extract code blocks and materialize expected files under output folder.
+    # Safety net: extract and materialize generated files
     extracted = _extract_file_blocks_from_output(final_state.get("code", ""))
-    if extracted:
-        print(f"\nDEBUG: Found {len(extracted)} extracted files", file=sys.stderr)
-        for orig_path, content in extracted.items():
-            rel_path = _sanitize_relative_output_path(orig_path)
-            print(f"DEBUG: Processing {orig_path} -> {rel_path}", file=sys.stderr)
-            
-            if not rel_path:
-                print(f"DEBUG:   Skipping (empty path)", file=sys.stderr)
-                continue
-            
-            is_complete = _is_complete_code_content(rel_path, content)
-            print(f"DEBUG:   Is complete: {is_complete}", file=sys.stderr)
-            
-            if not is_complete:
-                print(f"DEBUG:   Skipping (incomplete)", file=sys.stderr)
-                continue
-            
-            # Force all generated output under configured project directory
-            target = output_dir_path / rel_path
-            try:
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text(content + "\n", encoding="utf-8")
-                print(f"DEBUG:   Written to {target}", file=sys.stderr)
-            except Exception as e:
-                print(f"DEBUG:   ERROR writing to {target}: {e}", file=sys.stderr)
+    _materialize_files(extracted, output_dir_path)
 
     # Setup builder for the target language
     print(f"\nSetting up {lang_display} builder...", file=sys.stderr)
@@ -547,16 +640,17 @@ Acceptance criteria:
         print(f"[ERROR] Failed to setup {lang_display} project", file=sys.stderr)
         sys.exit(1)
     
-    # Build and execute
-    execution_output = ""
-    print(f"\nBuilding and executing {lang_display} project...", file=sys.stderr)
-    success, exec_output = builder.build_and_execute()
+    # Build and execute with automatic retry on error
+    print(f"\nStarting {lang_display} build with error recovery...", file=sys.stderr)
+    success, exec_output = _build_with_retry(
+        builder, output_dir_path, task, tool_registry, lang_display, max_retries=3
+    )
     
     execution_output = f"\n{'='*50}\n=== EXECUTION OUTPUT ===\n{'='*50}\n"
     if success:
-        execution_output += f"[SUCCESS] Application executed successfully:\n\n{exec_output}"
+        execution_output += f"[SUCCESS] Application executed successfully after retries:\n\n{exec_output}"
     else:
-        execution_output += f"[FAILED] Application execution failed:\n\n{exec_output}"
+        execution_output += f"[FAILED] Application execution failed after all retry attempts:\n\n{exec_output}"
 
     print("\n" + "="*50)
     print("=== PLANNER OUTPUT ===")
