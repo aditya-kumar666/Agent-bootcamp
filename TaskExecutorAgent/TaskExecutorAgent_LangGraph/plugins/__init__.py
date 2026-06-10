@@ -5,6 +5,7 @@ from .test_tools import TestToolsPlugin
 from .tool_registry import ToolRegistry, ToolDefinition
 from .tool_executor import ToolExecutor
 from .agentic_loop import AgenticLoop
+from .mcp_tools import MCPToolManager
 from .project_builder import (
     ProjectBuilder,
     CSharpBuilder,
@@ -21,6 +22,7 @@ __all__ = [
     "ToolDefinition",
     "ToolExecutor",
     "AgenticLoop",
+    "MCPToolManager",
     "ProjectBuilder",
     "CSharpBuilder",
     "JavaBuilder",

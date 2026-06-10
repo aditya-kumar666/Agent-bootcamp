@@ -18,7 +18,7 @@ from agents import (
     EvaluationAgent,
 )
 from memory.run_memory import RunMemory
-from plugins import FileToolsPlugin, TestToolsPlugin, ToolRegistry, ToolExecutor, AgenticLoop, BuilderFactory
+from plugins import FileToolsPlugin, TestToolsPlugin, ToolRegistry, ToolExecutor, AgenticLoop, BuilderFactory, MCPToolManager
 
 BASE_DIR = Path(__file__).resolve().parent
 PROMPTS_DIR = BASE_DIR / "prompts"
@@ -385,6 +385,18 @@ def setup_tool_registry() -> ToolRegistry:
         }
     )
     
+    # Phase 3: Register MCP tools with verbose output
+    mcp_config_path = BASE_DIR / "mcp_servers.json"
+    try:
+        mcp_manager = MCPToolManager(mcp_config_path)
+        mcp_registered = mcp_manager.register_all(registry, verbose=True)
+        if mcp_registered:
+            print(f"[OK] Registered {mcp_registered} MCP tools from {len(mcp_manager.get_registered_servers())} servers")
+            if mcp_manager.get_registered_servers():
+                print(f"     Servers: {', '.join(mcp_manager.get_registered_servers())}")
+    except Exception as ex:
+        print(f"[WARN] MCP tools not loaded: {ex}", file=sys.stderr)
+
     return registry
 
 

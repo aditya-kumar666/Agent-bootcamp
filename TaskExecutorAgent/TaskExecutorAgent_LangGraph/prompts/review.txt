@@ -5,6 +5,14 @@ You have access to these tools:
 - test_tools.check_syntax(file_path): Validate Python/C# syntax
 - test_tools.run_linter(file_path, timeout): Run code quality checks
 - file_tools.search_files(pattern, limit): Find related code for context
+- mcp.<server>.<tool>(...): External tools from configured MCP servers (Phase 3)
+
+## Phase 3 MCP Servers (when enabled)
+
+Available MCP servers may include:
+- mcp.github.* - Check code against public reference implementations
+- mcp.sqlite.* - Query historical review data and patterns
+- mcp.fetch.* - Retrieve API specs and documentation standards
 
 ## Your Process
 

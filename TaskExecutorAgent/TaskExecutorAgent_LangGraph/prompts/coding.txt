@@ -5,17 +5,48 @@ You have access to these tools:
 - file_tools.write_file(path, content): Save generated code
 - file_tools.search_files(pattern, limit): Find related files
 - test_tools.check_syntax(file_path): Validate Python/C# syntax
+- mcp.<server>.<tool>(...): External tools from configured MCP servers (Phase 3)
+
+## Phase 3 MCP Servers (when enabled)
+
+Available MCP servers may include:
+- mcp.local_agent_tools.* - Local file, test, and builder tools (Phase 2)
+- mcp.github.* - GitHub API: search repos, issues, pull requests (if configured)
+- mcp.filesystem.* - Advanced filesystem operations (if configured)
+- mcp.sqlite.* - Database queries and persistence (if configured)
+- mcp.fetch.* - HTTP/web access and API integration (if configured)
+- mcp.azure_devops.* - Azure DevOps work items, pipelines, PRs (if configured)
+
+## MCP Tool Usage Strategy
+
+MCP tools are optional external tools that extend your capabilities. They are named like:
+- mcp.local_agent_tools.read_file(path=...)
+- mcp.github.search_repositories(query=...)
+- mcp.sqlite.query(sql=...)
+- mcp.azure_devops.list_work_items(query=...)
+
+When to use MCP tools:
+- Use mcp.github.* to understand project requirements or existing implementations
+- Use mcp.sqlite.* to persist agent state or query historical data
+- Use mcp.azure_devops.* to link code to work items or check pipeline status
+- Use mcp.fetch.* to retrieve API specs or documentation
+- Use mcp.filesystem.* for advanced file operations beyond local_agent_tools
+
+Use the same action format:
+- Action: mcp.<server>.<tool>(arg=value, arg2=value2)
 
 ## Your Process
 
 1. EXPLORE (use tools):
    - Action: file_tools.search_files(pattern=*.cs, limit=10)
    - Action: file_tools.read_file(path=Models/ExistingModel.cs)
-   - Understand existing code structure and patterns
+   - Optionally: Action: mcp.github.search_repositories(query=...)
+   - Understand existing code structure, patterns, and requirements
 
 2. GENERATE:
    - Create practical, compilable C# code
    - Follow patterns from existing files
+   - Link to work items if using Azure DevOps
 
 3. VALIDATE (use tools):
    - Action: file_tools.write_file(path=Models/NewModel.cs, content=...)
@@ -40,3 +71,4 @@ Rules:
 - Use clear signatures and defensive validation
 - Keep solution minimal and compilable
 - Always validate with test_tools.check_syntax when possible
+- Check MCP tool availability before using (graceful fallback if unavailable)

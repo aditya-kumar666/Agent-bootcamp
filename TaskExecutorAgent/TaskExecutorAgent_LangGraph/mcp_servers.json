@@ -1,0 +1,62 @@
+{
+  "servers": {
+    "local_agent_tools": {
+      "command": "python",
+      "args": ["mcp_servers/local_agent_tools_server.py"],
+      "transport": "stdio",
+      "enabled": true,
+      "description": "Phase 2: Local file, test, and project builder tools"
+    },
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"
+      },
+      "transport": "stdio",
+      "enabled": false,
+      "description": "GitHub API tools for repository search, issue management, code search"
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem"],
+      "env": {
+        "ALLOWED_DIRECTORIES": "${WORKSPACE_ROOT}"
+      },
+      "transport": "stdio",
+      "enabled": false,
+      "description": "Advanced filesystem operations with safety constraints"
+    },
+    "sqlite": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-sqlite"],
+      "env": {
+        "DATABASE_PATH": "${WORKSPACE_ROOT}/agent.db"
+      },
+      "transport": "stdio",
+      "enabled": false,
+      "description": "SQLite database tools for agent state and memory persistence"
+    },
+    "fetch": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-fetch"],
+      "transport": "stdio",
+      "enabled": false,
+      "description": "HTTP/fetch tools for web access and API integration"
+    },
+    "azure_devops": {
+      "command": "python",
+      "args": ["mcp_servers/azure_devops_server.py"],
+      "env": {
+        "AZURE_DEVOPS_ORG": "${AZURE_DEVOPS_ORG}",
+        "AZURE_DEVOPS_PROJECT": "${AZURE_DEVOPS_PROJECT}",
+        "AZURE_DEVOPS_PAT": "${AZURE_DEVOPS_PAT}"
+      },
+      "transport": "stdio",
+      "enabled": false,
+      "description": "Azure DevOps integration for work items, pipelines, and repositories"
+    }
+  },
+  "phase": 3,
+  "description": "Phase 3 Multi-Server MCP Ecosystem - Extend with GitHub, Filesystem, SQLite, Azure DevOps, and HTTP access"
+}
