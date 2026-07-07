@@ -153,6 +153,15 @@ def build_graph():
     return graph.compile()
 
 
+def print_memory_token_report(memory: RunMemory) -> None:
+    """Print memory token usage at the end of a run."""
+    print("\n=== MEMORY TOKEN USAGE ===")
+    print(f"Total memory tokens: {memory.get_total_memory_tokens()}")
+    print("Token breakdown:")
+    for buffer_name, token_count in memory.get_token_breakdown().items():
+        print(f"- {buffer_name}: {token_count}")
+
+
 def validate_environment() -> bool:
     """Validate that required environment variables are set."""
     load_dotenv(BASE_DIR / ".env")
@@ -202,6 +211,7 @@ Acceptance criteria:
         print(final_state.get("reflection", ""))
     print("\n=== EVALUATION OUTPUT ===")
     print(final_state.get("evaluation", ""))
+    print_memory_token_report(final_state["memory"])
 
 
 if __name__ == "__main__":

@@ -563,6 +563,17 @@ def validate_environment() -> bool:
     return True
 
 
+def print_memory_token_report(memory: RunMemory) -> None:
+    """Print memory token usage at the end of a run."""
+    print("\n" + "="*50)
+    print("=== MEMORY TOKEN USAGE ===")
+    print("="*50)
+    print(f"Total memory tokens: {memory.get_total_memory_tokens()}")
+    print("Token breakdown:")
+    for buffer_name, token_count in memory.get_token_breakdown().items():
+        print(f"- {buffer_name}: {token_count}")
+
+
 def main(language: str = "csharp"):
     """Main entry point for the task executor.
     
@@ -689,6 +700,7 @@ Acceptance criteria:
     print("=== EVALUATION OUTPUT ===")
     print("="*50)
     print(final_state.get("evaluation", ""))
+    print_memory_token_report(final_state["memory"])
 
     # Post-run verification of generated files/folder
     existing = [
