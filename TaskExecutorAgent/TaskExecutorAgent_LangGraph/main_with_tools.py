@@ -17,6 +17,7 @@ from agents import (
     ReflectionAgent,
     EvaluationAgent,
 )
+from guardrails import build_context_snapshot_with_budget
 from memory.run_memory import RunMemory
 from plugins import FileToolsPlugin, TestToolsPlugin, ToolRegistry, ToolExecutor, AgenticLoop, BuilderFactory, MCPToolManager
 
@@ -434,7 +435,8 @@ def planner_node(state: GraphState, planner: PlannerAgent) -> GraphState:
 def coding_node(state: GraphState, coding: CodingAgent, tool_executor: ToolExecutor) -> GraphState:
     """Coding node: generate code based on plan."""
     try:
-        user_input = f"{state['task']}\n\nPlan:\n{state['plan']}\n\n{state['memory'].build_context_snapshot()}"
+        memory_context = build_context_snapshot_with_budget(state["memory"])
+        user_input = f"{state['task']}\n\nPlan:\n{state['plan']}\n\n{memory_context}"
         out = coding.execute(state["task"], user_input)
         state["code"] = out
         state["memory"].coding_outputs.append(out)
@@ -448,7 +450,8 @@ def coding_node(state: GraphState, coding: CodingAgent, tool_executor: ToolExecu
 def review_node(state: GraphState, review: ReviewAgent) -> GraphState:
     """Review node: review the generated code."""
     try:
-        user_input = f"{state['task']}\n\nCode:\n{state['code']}\n\n{state['memory'].build_context_snapshot()}"
+        memory_context = build_context_snapshot_with_budget(state["memory"])
+        user_input = f"{state['task']}\n\nCode:\n{state['code']}\n\n{memory_context}"
         out = review.review(state["task"], user_input)
         state["review"] = out
         state["memory"].review_outputs.append(out)
@@ -462,11 +465,12 @@ def review_node(state: GraphState, review: ReviewAgent) -> GraphState:
 def reflection_node(state: GraphState, reflection: ReflectionAgent) -> GraphState:
     """Reflection node: reflect on review feedback and suggest improvements."""
     try:
+        memory_context = build_context_snapshot_with_budget(state["memory"])
         user_input = (
             f"Task:\n{state['task']}\n\n"
             f"Current Code:\n{state['code']}\n\n"
             f"Review Feedback:\n{state['review']}\n\n"
-            f"{state['memory'].build_context_snapshot()}"
+            f"{memory_context}"
         )
         out = reflection.reflect(state["task"], state["code"], state["review"])
         state["reflection"] = out
@@ -481,7 +485,8 @@ def reflection_node(state: GraphState, reflection: ReflectionAgent) -> GraphStat
 def recode_after_reflection_node(state: GraphState, coding: CodingAgent) -> GraphState:
     """Recode node: regenerate code based on reflection."""
     try:
-        user_input = f"{state['task']}\n\nReflection:\n{state['reflection']}\n\n{state['memory'].build_context_snapshot()}"
+        memory_context = build_context_snapshot_with_budget(state["memory"])
+        user_input = f"{state['task']}\n\nReflection:\n{state['reflection']}\n\n{memory_context}"
         out = coding.execute(state["task"], user_input)
         state["code"] = out
         state["memory"].coding_outputs.append(out)
