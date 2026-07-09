@@ -419,16 +419,16 @@ The system supports generating and executing code in **multiple programming lang
 
 ```bash
 # Generate C# TodoApp
-python run_with_tools.py csharp
+python main.py csharp
 
 # Generate Python TodoApp
-python run_with_tools.py python
+python main.py python
 
 # Generate Java TodoApp
-python run_with_tools.py java
+python main.py java
 
 # Generate Go TodoApp
-python run_with_tools.py go
+python main.py go
 ```
 
 ### **Self-Healing Execution Retry**
@@ -452,7 +452,7 @@ Build & Execute (Attempt 2) → SUCCESS ✓
 
 **Monitor Retry Activity:**
 ```bash
-python run_with_tools.py python 2>&1 | grep "RETRY\|ERROR\|REGENERATE"
+python main.py python 2>&1 | grep "RETRY\|ERROR\|REGENERATE"
 ```
 
 Output example:

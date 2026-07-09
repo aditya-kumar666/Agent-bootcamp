@@ -19,7 +19,7 @@ from agents import (
 )
 from guardrails import build_context_snapshot_with_budget
 from memory.run_memory import RunMemory
-from plugins import FileToolsPlugin, TestToolsPlugin, ToolRegistry, ToolExecutor, AgenticLoop, BuilderFactory, MCPToolManager
+from plugins import FileToolsPlugin, TestToolsPlugin, ToolRegistry, BuilderFactory, MCPToolManager
 
 BASE_DIR = Path(__file__).resolve().parent
 PROMPTS_DIR = BASE_DIR / "prompts"
@@ -443,7 +443,7 @@ def planner_node(state: GraphState, planner: PlannerAgent) -> GraphState:
     return state
 
 
-def coding_node(state: GraphState, coding: CodingAgent, tool_executor: ToolExecutor) -> GraphState:
+def coding_node(state: GraphState, coding: CodingAgent) -> GraphState:
     """Coding node: generate code based on plan."""
     try:
         memory_context = build_context_snapshot_with_budget(state["memory"])
@@ -544,7 +544,7 @@ def build_graph(tool_registry: ToolRegistry):
     
     # Add nodes with closure over agents
     graph.add_node("planner", lambda state: planner_node(state, planner))
-    graph.add_node("coding", lambda state: coding_node(state, coding, None))
+    graph.add_node("coding", lambda state: coding_node(state, coding))
     graph.add_node("review", lambda state: review_node(state, review))
     graph.add_node("reflection", lambda state: reflection_node(state, reflection))
     graph.add_node("recode", lambda state: recode_after_reflection_node(state, coding))
