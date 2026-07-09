@@ -1,7 +1,7 @@
 """Clear entrypoint: run workflow WITH tool-calling support."""
 
 import sys
-from main_with_tools import main
+from main import main
 
 
 if __name__ == "__main__":

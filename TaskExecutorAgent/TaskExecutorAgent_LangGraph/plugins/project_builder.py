@@ -4,6 +4,18 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 import subprocess
 import sys
+import os
+
+
+def is_verbose_logging_enabled() -> bool:
+    """Enable noisy builder diagnostics only when VERBOSE_LOGS=true."""
+    return os.getenv("VERBOSE_LOGS", "false").lower() == "true"
+
+
+def verbose_log(message: str) -> None:
+    """Print non-essential builder logs only in verbose mode."""
+    if is_verbose_logging_enabled():
+        print(message, file=sys.stderr)
 
 
 class ProjectBuilder(ABC):
@@ -111,7 +123,7 @@ class CSharpBuilder(ProjectBuilder):
         try:
             csproj_path = self.output_dir / f"{self.project_name}.csproj"
             csproj_path.write_text(csproj_content, encoding="utf-8")
-            print(f"[OK] Created project file: {csproj_path}", file=sys.stderr)
+            verbose_log(f"[OK] Created project file: {csproj_path}")
             return True
         except Exception as e:
             print(f"[ERROR] Failed to create .csproj: {e}", file=sys.stderr)
@@ -120,7 +132,7 @@ class CSharpBuilder(ProjectBuilder):
     def build(self) -> tuple[bool, str]:
         """Build C# project using dotnet."""
         try:
-            print(f"\n[BUILD] Compiling C# project...", file=sys.stderr)
+            verbose_log("\n[BUILD] Compiling C# project...")
             
             result = subprocess.run(
                 ["dotnet", "build", "-c", "Release"],
@@ -135,7 +147,7 @@ class CSharpBuilder(ProjectBuilder):
                 print(f"[ERROR] Build failed", file=sys.stderr)
                 return False, error_msg
             
-            print(f"[OK] Build successful", file=sys.stderr)
+            verbose_log("[OK] Build successful")
             return True, "Build successful"
             
         except subprocess.TimeoutExpired:
@@ -153,7 +165,7 @@ class CSharpBuilder(ProjectBuilder):
             if not exe_path.exists():
                 return False, f"Executable not found at {exe_path}"
             
-            print(f"\n[RUN] Executing application...", file=sys.stderr)
+            verbose_log("\n[RUN] Executing application...")
             
             result = subprocess.run(
                 [str(exe_path)],
@@ -168,7 +180,7 @@ class CSharpBuilder(ProjectBuilder):
                 print(f"[ERROR] Execution failed", file=sys.stderr)
                 return False, f"Execution error: {error_msg}"
             
-            print(f"[OK] Execution successful", file=sys.stderr)
+            verbose_log("[OK] Execution successful")
             return True, output
             
         except subprocess.TimeoutExpired:
@@ -279,7 +291,7 @@ class JavaBuilder(ProjectBuilder):
         try:
             pom_path = self.output_dir / "pom.xml"
             pom_path.write_text(pom_content, encoding="utf-8")
-            print(f"[OK] Created project file: {pom_path}", file=sys.stderr)
+            verbose_log(f"[OK] Created project file: {pom_path}")
             return True
         except Exception as e:
             print(f"[ERROR] Failed to create pom.xml: {e}", file=sys.stderr)
@@ -288,7 +300,7 @@ class JavaBuilder(ProjectBuilder):
     def build(self) -> tuple[bool, str]:
         """Build Java project using Maven."""
         try:
-            print(f"\n[BUILD] Compiling Java project...", file=sys.stderr)
+            verbose_log("\n[BUILD] Compiling Java project...")
             
             result = subprocess.run(
                 ["mvn", "clean", "package", "-q"],
@@ -303,7 +315,7 @@ class JavaBuilder(ProjectBuilder):
                 print(f"[ERROR] Build failed", file=sys.stderr)
                 return False, error_msg
             
-            print(f"[OK] Build successful", file=sys.stderr)
+            verbose_log("[OK] Build successful")
             return True, "Build successful"
             
         except subprocess.TimeoutExpired:
@@ -327,7 +339,7 @@ class JavaBuilder(ProjectBuilder):
             
             jar_path = jar_files[0]
             
-            print(f"\n[RUN] Executing Java application...", file=sys.stderr)
+            verbose_log("\n[RUN] Executing Java application...")
             
             result = subprocess.run(
                 ["java", "-jar", str(jar_path)],
@@ -342,7 +354,7 @@ class JavaBuilder(ProjectBuilder):
                 print(f"[ERROR] Execution failed", file=sys.stderr)
                 return False, f"Execution error: {error_msg}"
             
-            print(f"[OK] Execution successful", file=sys.stderr)
+            verbose_log("[OK] Execution successful")
             return True, output
             
         except subprocess.TimeoutExpired:
@@ -385,7 +397,7 @@ class PythonBuilder(ProjectBuilder):
             init_path = self.output_dir / "__init__.py"
             if not init_path.exists():
                 init_path.write_text("", encoding="utf-8")
-            print(f"[OK] Python project structure ready", file=sys.stderr)
+            verbose_log("[OK] Python project structure ready")
             return True
         except Exception as e:
             print(f"[ERROR] Failed to setup Python project: {e}", file=sys.stderr)
@@ -393,8 +405,8 @@ class PythonBuilder(ProjectBuilder):
     
     def build(self) -> tuple[bool, str]:
         """For Python, build is a no-op (interpreted language)."""
-        print(f"\n[BUILD] Python is interpreted, skipping build...", file=sys.stderr)
-        print(f"[OK] Build skipped (interpreted language)", file=sys.stderr)
+        verbose_log("\n[BUILD] Python is interpreted, skipping build...")
+        verbose_log("[OK] Build skipped (interpreted language)")
         return True, "Python is interpreted"
     
     def execute(self) -> tuple[bool, str]:
@@ -432,11 +444,11 @@ for t in all_todos:
     print(f"  - {t.Title} (Done: {t.IsDone})")
 '''
                     main_path.write_text(demo_script, encoding="utf-8")
-                    print(f"[OK] Auto-generated main.py", file=sys.stderr)
+                    verbose_log("[OK] Auto-generated main.py")
                 else:
                     return False, "main.py not found and cannot auto-generate (missing Models/Services)"
             
-            print(f"\n[RUN] Executing Python application...", file=sys.stderr)
+            verbose_log("\n[RUN] Executing Python application...")
             
             result = subprocess.run(
                 ["python", str(main_path)],
@@ -452,7 +464,7 @@ for t in all_todos:
                 print(f"[ERROR] Execution failed", file=sys.stderr)
                 return False, f"Execution error: {error_msg}"
             
-            print(f"[OK] Execution successful", file=sys.stderr)
+            verbose_log("[OK] Execution successful")
             return True, output
             
         except subprocess.TimeoutExpired:
@@ -498,7 +510,7 @@ go 1.21
         try:
             go_mod_path = self.output_dir / "go.mod"
             go_mod_path.write_text(go_mod_content, encoding="utf-8")
-            print(f"[OK] Created project file: {go_mod_path}", file=sys.stderr)
+            verbose_log(f"[OK] Created project file: {go_mod_path}")
             return True
         except Exception as e:
             print(f"[ERROR] Failed to create go.mod: {e}", file=sys.stderr)
@@ -507,7 +519,7 @@ go 1.21
     def build(self) -> tuple[bool, str]:
         """Build Go project."""
         try:
-            print(f"\n[BUILD] Building Go project...", file=sys.stderr)
+            verbose_log("\n[BUILD] Building Go project...")
             
             result = subprocess.run(
                 ["go", "build", "-o", "todoapp"],
@@ -522,7 +534,7 @@ go 1.21
                 print(f"[ERROR] Build failed", file=sys.stderr)
                 return False, error_msg
             
-            print(f"[OK] Build successful", file=sys.stderr)
+            verbose_log("[OK] Build successful")
             return True, "Build successful"
             
         except subprocess.TimeoutExpired:
@@ -548,7 +560,7 @@ go 1.21
             if not exe_path:
                 return False, f"Executable not found (tried: {', '.join(possible_names)})"
             
-            print(f"\n[RUN] Executing Go application...", file=sys.stderr)
+            verbose_log("\n[RUN] Executing Go application...")
             
             result = subprocess.run(
                 [str(exe_path)],
@@ -563,7 +575,7 @@ go 1.21
                 print(f"[ERROR] Execution failed", file=sys.stderr)
                 return False, f"Execution error: {error_msg}"
             
-            print(f"[OK] Execution successful", file=sys.stderr)
+            verbose_log("[OK] Execution successful")
             return True, output
             
         except subprocess.TimeoutExpired:
