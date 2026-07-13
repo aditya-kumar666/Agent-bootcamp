@@ -1,12 +1,15 @@
 """Base agent class for common functionality."""
 
 import os
+import time
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Optional
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, AIMessage
+
+from observability import get_langfuse_client
 
 
 class BaseAgent(ABC):
@@ -69,11 +72,33 @@ class BaseAgent(ABC):
         Returns:
             LLM response
         """
+        observer = get_langfuse_client()
+        agent_name = self.__class__.__name__
+        
         messages = [
             ("system", system_prompt),
             ("user", user_input),
         ]
-        return self.llm.invoke(messages).content
+        
+        with observer.trace(
+            name=f"{agent_name}.invoke",
+            input_data={"system_prompt": system_prompt[:200], "user_input": user_input[:200]},
+            metadata={"agent": agent_name}
+        ) as trace:
+            start_time = time.time()
+            response = self.llm.invoke(messages).content
+            elapsed = time.time() - start_time
+            
+            if trace:
+                observer.generation(
+                    trace,
+                    name="llm_call",
+                    model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+                    input_data={"system": system_prompt[:100], "user": user_input[:100]},
+                    output=response[:200]
+                )
+        
+        return response
 
     def invoke_with_tools(self, system_prompt: str, user_input: str, max_iterations: int = 5) -> str:
         """Invoke LLM with tool calling support (ReAct pattern).
@@ -88,6 +113,9 @@ class BaseAgent(ABC):
         Returns:
             Final LLM response after tool calls
         """
+        observer = get_langfuse_client()
+        agent_name = self.__class__.__name__
+        
         # If no tools available, fall back to regular invoke
         if not self.tool_registry:
             return self.invoke(system_prompt, user_input)
@@ -101,41 +129,58 @@ class BaseAgent(ABC):
             HumanMessage(content=user_input),
         ]
         
-        iteration = 0
-        while iteration < max_iterations:
-            iteration += 1
-            
-            try:
-                # Call LLM
-                response = self.llm.invoke(messages).content
-                
-                # Try to parse tool call from response
-                tool_call = executor.parse_tool_call(response)
-                
-                if not tool_call:
-                    # No tool call found, this is the final answer
-                    return response
-                
-                # Execute the tool
-                tool_name = tool_call["tool"]
-                tool_args = tool_call.get("args", {})
+        with observer.trace(
+            name=f"{agent_name}.invoke_with_tools",
+            input_data={"user_input": user_input[:200]},
+            metadata={"agent": agent_name, "max_iterations": max_iterations}
+        ) as trace:
+            iteration = 0
+            while iteration < max_iterations:
+                iteration += 1
                 
                 try:
-                    tool_result = executor.execute_tool(tool_name, **tool_args)
-                except Exception as tool_ex:
-                    tool_result = f"ERROR executing {tool_name}: {str(tool_ex)}"
-                
-                # Add exchange to conversation
-                messages.append(AIMessage(content=response))
-                messages.append(HumanMessage(content=f"Tool Result:\n{tool_result}"))
-                
-            except Exception as ex:
-                # If parsing/execution fails, return what we have
-                print(f"[Agent] Tool execution error (iteration {iteration}): {ex}")
-                return response if 'response' in locals() else f"Error: {str(ex)}"
-        
-        # Max iterations reached, return last response
-        return response if 'response' in locals() else "Max iterations reached without final answer"
+                    # Call LLM
+                    response = self.llm.invoke(messages).content
+                    
+                    # Try to parse tool call from response
+                    tool_call = executor.parse_tool_call(response)
+                    
+                    if not tool_call:
+                        # No tool call found, this is the final answer
+                        if trace:
+                            observer.span(trace, "final_answer", output=response[:200])
+                        return response
+                    
+                    # Execute the tool with tracing
+                    tool_name = tool_call["tool"]
+                    tool_args = tool_call.get("args", {})
+                    
+                    if trace:
+                        observer.span(
+                            trace,
+                            f"tool_call.{tool_name}",
+                            input_data=tool_args,
+                            output=None
+                        )
+                    
+                    try:
+                        tool_result = executor.execute_tool(tool_name, **tool_args)
+                    except Exception as tool_ex:
+                        tool_result = f"ERROR executing {tool_name}: {str(tool_ex)}"
+                        if trace:
+                            observer.span(trace, f"tool_error.{tool_name}", output=tool_result)
+                    
+                    # Add exchange to conversation
+                    messages.append(AIMessage(content=response))
+                    messages.append(HumanMessage(content=f"Tool Result:\n{tool_result}"))
+                    
+                except Exception as ex:
+                    # If parsing/execution fails, return what we have
+                    print(f"[Agent] Tool execution error (iteration {iteration}): {ex}")
+                    return response if 'response' in locals() else f"Error: {str(ex)}"
+            
+            # Max iterations reached, return last response
+            return response if 'response' in locals() else "Max iterations reached without final answer"
 
     @abstractmethod
     def get_fallback_response(self, *args, **kwargs) -> str:

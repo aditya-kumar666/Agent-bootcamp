@@ -20,6 +20,7 @@ from agents import (
 from guardrails import build_context_snapshot_with_budget
 from memory.run_memory import RunMemory
 from plugins import FileToolsPlugin, TestToolsPlugin, ToolRegistry, BuilderFactory, MCPToolManager
+from observability import get_langfuse_client
 
 BASE_DIR = Path(__file__).resolve().parent
 PROMPTS_DIR = BASE_DIR / "prompts"
@@ -600,6 +601,13 @@ def main(language: str = "csharp"):
     if not validate_environment():
         sys.exit(1)
 
+    # Initialize Langfuse observability
+    observer = get_langfuse_client()
+    if observer.enabled:
+        print("[OK] Langfuse observability enabled", flush=True)
+    else:
+        print("[WARN] Langfuse disabled (no credentials or client unavailable)", flush=True)
+
     # Setup tools
     verbose_log("Setting up tool registry...")
     tool_registry = setup_tool_registry()
@@ -749,6 +757,10 @@ Acceptance criteria:
 
     if execution_output:
         print(execution_output)
+    
+    # Flush Langfuse traces
+    observer.flush()
+    print("\n[OK] Langfuse traces flushed", flush=True)
 
 
 if __name__ == "__main__":
