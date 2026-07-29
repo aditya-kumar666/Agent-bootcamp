@@ -641,3 +641,123 @@ Thought: I can now generate a compatible update.
 ```
 
 This keeps agents grounded in real workspace state and improves output quality.
+
+---
+
+## 🤝 External A2A Communication
+
+This project now exposes the existing LangGraph workflow through a lightweight
+A2A-style HTTP/JSON adapter while keeping the internal `GraphState`
+orchestration unchanged.
+
+### Internal vs External Boundaries
+
+```text
+External agents
+   ↓ A2A HTTP/JSON
+TaskExecutorAgent A2A adapter
+   ↓ existing LangGraph GraphState
+Planner → Coding → Review → Reflection/Recode → Evaluation
+   ↓ ToolRegistry / MCP / local tools
+```
+
+### Start the A2A Server
+
+```bash
+python main.py a2a-server
+```
+
+Optional environment variables:
+
+```env
+A2A_HOST=127.0.0.1
+A2A_PORT=8080
+```
+
+### Endpoints
+
+| Endpoint | Method | Purpose |
+|---|---:|---|
+| `/.well-known/agent.json` | `GET` | Agent card / capability discovery |
+| `/health` | `GET` | Health check |
+| `/a2a/tasks` | `POST` | Execute a task through the existing LangGraph workflow |
+
+### Example Request
+
+#### PowerShell
+
+In PowerShell, `curl` is usually an alias for `Invoke-WebRequest`, so use one
+of these PowerShell-safe forms:
+
+```powershell
+$body = @{
+  task = "Create a Python email validator with tests"
+  sender = "external-agent"
+} | ConvertTo-Json
+
+Invoke-RestMethod `
+  -Uri "http://127.0.0.1:8080/a2a/tasks" `
+  -Method Post `
+  -ContentType "application/json" `
+  -Body $body
+```
+
+Or call the real curl executable explicitly using a JSON file. This is the most
+reliable `curl.exe` option on Windows because it avoids inline JSON escaping:
+
+```powershell
+@'
+{"task":"Create a Python email validator with tests","sender":"external-agent"}
+'@ | Set-Content -Encoding utf8 a2a-request.json
+
+curl.exe -X POST "http://127.0.0.1:8080/a2a/tasks" `
+  -H "Content-Type: application/json" `
+  --data-binary "@a2a-request.json"
+```
+
+If you still want inline JSON with `curl.exe`, use this form:
+
+```powershell
+curl.exe -X POST "http://127.0.0.1:8080/a2a/tasks" `
+  -H "Content-Type: application/json" `
+  --% -d "{\"task\":\"Create a Python email validator with tests\",\"sender\":\"external-agent\"}"
+```
+
+Single quotes are not stripped the same way on Windows PowerShell, and inline
+JSON escaping differs between shells. Prefer `Invoke-RestMethod` or the JSON
+file approach above.
+
+#### cmd.exe / Git Bash / Linux/macOS shell
+
+```bash
+curl -X POST http://127.0.0.1:8080/a2a/tasks ^
+  -H "Content-Type: application/json" ^
+  -d "{\"task\": \"Create a Python email validator with tests\", \"sender\": \"external-agent\"}"
+```
+
+For Linux/macOS or Git Bash, use backslashes instead of `^`:
+
+```bash
+curl -X POST http://127.0.0.1:8080/a2a/tasks \
+  -H "Content-Type: application/json" \
+  -d '{"task":"Create a Python email validator with tests","sender":"external-agent"}'
+```
+
+The response includes the internal workflow outputs projected into an external
+payload:
+
+```json
+{
+  "request_id": "...",
+  "status": "completed",
+  "agent": "task-executor-langgraph",
+  "result": {
+    "plan": "...",
+    "code": "...",
+    "review": "...",
+    "reflection": "...",
+    "evaluation": "..."
+  },
+  "error": null
+}
+```

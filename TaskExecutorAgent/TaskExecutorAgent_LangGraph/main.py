@@ -21,6 +21,7 @@ from guardrails import build_context_snapshot_with_budget
 from memory.run_memory import RunMemory
 from plugins import FileToolsPlugin, TestToolsPlugin, ToolRegistry, BuilderFactory, MCPToolManager
 from observability import get_langfuse_client
+from a2a import run_a2a_server
 
 BASE_DIR = Path(__file__).resolve().parent
 PROMPTS_DIR = BASE_DIR / "prompts"
@@ -565,6 +566,18 @@ def build_graph(tool_registry: ToolRegistry):
     return graph.compile()
 
 
+def run_langgraph_workflow(task: str) -> GraphState:
+    """Run the existing LangGraph GraphState workflow for an externally supplied task.
+
+    This is used by the A2A adapter and intentionally preserves the current
+    internal orchestration model.
+    """
+    tool_registry = setup_tool_registry()
+    app = build_graph(tool_registry)
+    initial: GraphState = {"task": task, "memory": RunMemory()}
+    return app.invoke(initial)
+
+
 def validate_environment() -> bool:
     """Validate that required environment variables are set."""
     load_dotenv(BASE_DIR / ".env")
@@ -766,6 +779,16 @@ Acceptance criteria:
 if __name__ == "__main__":
     import sys
     
+    # Optional external A2A server mode. This does not change the internal
+    # LangGraph GraphState orchestration; it only exposes it over HTTP/JSON.
+    if len(sys.argv) > 1 and sys.argv[1] == "a2a-server":
+        if not validate_environment():
+            sys.exit(1)
+        host = os.getenv("A2A_HOST", "127.0.0.1")
+        port = int(os.getenv("A2A_PORT", "8080"))
+        run_a2a_server(run_langgraph_workflow, host=host, port=port)
+        sys.exit(0)
+
     # Parse command-line arguments
     language = "csharp"  # default
     if len(sys.argv) > 1:
