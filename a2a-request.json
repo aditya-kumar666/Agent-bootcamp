@@ -1,0 +1,11 @@
+﻿{
+  "message": {
+    "messageId": "msg-1",
+    "role": "ROLE_USER",
+    "parts": [
+      {
+        "text": "Create a Python email validator with tests"
+      }
+    ]
+  }
+}

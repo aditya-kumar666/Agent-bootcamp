@@ -21,7 +21,7 @@ from guardrails import build_context_snapshot_with_budget
 from memory.run_memory import RunMemory
 from plugins import FileToolsPlugin, TestToolsPlugin, ToolRegistry, BuilderFactory, MCPToolManager
 from observability import get_langfuse_client
-from a2a import run_a2a_server
+from a2a_adapter import run_a2a_server
 
 BASE_DIR = Path(__file__).resolve().parent
 PROMPTS_DIR = BASE_DIR / "prompts"

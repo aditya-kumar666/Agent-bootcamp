@@ -6,3 +6,4 @@ mcp>=1.0.0
 tiktoken>=0.7.0
 langfuse>=3.0.0
 python-json-logger>=2.0.7
+a2a-sdk==1.1.2
