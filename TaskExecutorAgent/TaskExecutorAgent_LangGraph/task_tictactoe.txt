@@ -1,0 +1,15 @@
+Implement a practical {lang_display} feature in this repo.
+
+IMPORTANT OUTPUT LOCATION RULE:
+- Create all generated files ONLY under: {output_project_dir}
+- Do not write outside that folder.
+- Use file_tools.write_file for every created/updated file.
+
+Requested implementation:
+- Create a tictactoe game with clear board representation, game loop, and win/draw detection.
+- Provide a runnable entry point (main.py / Program.cs) that plays an automated demonstration game (making moves, printing the board, and displaying the outcome) so it can execute without blocking for console input.
+
+Acceptance criteria:
+- Compilable/runnable {lang_display} code
+- Clear method signatures and error/move validation
+- Includes unit tests verifying win conditions and moves.

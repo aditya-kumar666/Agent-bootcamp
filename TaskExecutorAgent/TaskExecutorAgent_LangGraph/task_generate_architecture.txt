@@ -1,0 +1,27 @@
+Implement a practical {lang_display} feature in this repo.
+
+IMPORTANT OUTPUT LOCATION RULE:
+- Create all generated files ONLY under: {output_project_dir}
+- Do not write outside that folder.
+- Use file_tools.write_file for every created/updated file.
+
+Requested implementation:
+- Analyze current project architecture and generate a workflow diagram and architecture analyzer.
+- Produce a runnable script using Python standard libraries ONLY (no external graphviz, no pip packages).
+- The script MUST write a complete Mermaid flowchart into architecture_diagram.md.
+
+CRITICAL CODE REQUIREMENTS:
+1. The main script (main.py or flow_diagram_generator.py) MUST have an `if __name__ == "__main__":` block.
+2. Inside that block, the script MUST:
+   a. Build the Mermaid diagram string (flowchart TD with all agent nodes and edges).
+   b. Open "architecture_diagram.md" for writing (using open(..., "w")).
+   c. Write the complete Mermaid diagram to that file.
+   d. Print "Mermaid diagram generated successfully." to stdout.
+3. The Mermaid diagram MUST include all 6 nodes: Planner, Coding, Review, Reflection, Recode, Evaluation.
+4. Use ONLY Python standard library modules (os, pathlib, textwrap, etc.). NO graphviz, NO matplotlib.
+
+Acceptance criteria:
+- Compilable/runnable {lang_display} code using standard libraries only
+- Accurately details the LangGraph agent nodes (Planner, Coding, Review, Reflection, Recode, Evaluation)
+- Running main.py produces a non-empty architecture_diagram.md containing a valid Mermaid flowchart block
+- Output includes a clean Mermaid diagram and summary report.

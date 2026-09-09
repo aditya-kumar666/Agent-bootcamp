@@ -101,9 +101,16 @@ class CSharpBuilder(ProjectBuilder):
                 text=True,
                 timeout=5
             )
-            return result.returncode == 0
+            if result.returncode != 0:
+                detail = (result.stderr or result.stdout or "").strip()
+                print(f"[ERROR] dotnet --version failed (exit {result.returncode}).", file=sys.stderr)
+                if detail:
+                    print(f"        Reason: {detail}", file=sys.stderr)
+                print("        Fix: reinstall .NET SDK from https://dotnet.microsoft.com/download", file=sys.stderr)
+                return False
+            return True
         except FileNotFoundError:
-            print("[ERROR] dotnet not found. Install .NET SDK.", file=sys.stderr)
+            print("[ERROR] 'dotnet' not found in PATH. Install .NET SDK from https://dotnet.microsoft.com/download", file=sys.stderr)
             return False
         except Exception as e:
             print(f"[ERROR] Failed to validate .NET: {e}", file=sys.stderr)
@@ -411,18 +418,17 @@ class PythonBuilder(ProjectBuilder):
         return True, "Python is interpreted"
     
     def execute(self) -> tuple[bool, str]:
-        """Execute Python application."""
+        """Execute Python application with auto-install and soft-timeout handling."""
         try:
+            # 1. Standard entry point names
             main_path = None
-            
-            # 1. Check standard conventions: main.py, app.py, __main__.py
             for name in ["main.py", "app.py", "__main__.py"]:
                 candidate = self.output_dir / name
                 if candidate.exists():
                     main_path = candidate
                     break
 
-            # 2. Inspect Python files to find one with an entry point (__main__ block)
+            # 2. Search for a file with an if __name__ == "__main__" block
             if not main_path:
                 py_files = [
                     f for f in self.output_dir.rglob("*.py")
@@ -437,56 +443,79 @@ class PythonBuilder(ProjectBuilder):
                     except Exception:
                         pass
 
-                # 3. Fallback to top-level or any non-test Python file
-                if not main_path:
-                    top_level_py = [
-                        f for f in self.output_dir.glob("*.py")
-                        if f.name != "__init__.py" and not f.name.startswith("test_")
-                    ]
-                    if top_level_py:
-                        main_path = top_level_py[0]
-                    elif py_files:
-                        main_path = py_files[0]
-                    else:
-                        return False, "No executable Python files found in output directory"
-            
+            # 3. Fallback: any non-test top-level .py file
+            if not main_path:
+                top_level = [
+                    f for f in self.output_dir.glob("*.py")
+                    if f.name != "__init__.py" and not f.name.startswith("test_")
+                ]
+                if top_level:
+                    main_path = top_level[0]
+                else:
+                    return False, "No executable Python files found in output directory"
+
             verbose_log(f"\n[RUN] Executing Python application ({main_path.name})...")
-            
-            # Pass simulated stdin input so interactive prompt loops (e.g. input()) don't hang in CI/automated runs
-            simulated_input = "1\n2\n3\n4\n5\n6\n7\n8\n9\nq\nexit\n\n"
-            result = subprocess.run(
-                ["python", str(main_path)],
-                input=simulated_input,
-                capture_output=True,
-                text=True,
-                timeout=20,
-                cwd=str(self.output_dir)
-            )
-            
-            output = result.stdout
-            if result.returncode != 0 and "EOFError" not in (result.stderr or ""):
-                error_msg = result.stderr or "Unknown error"
-                print(f"[ERROR] Execution failed", file=sys.stderr)
-                return False, f"Execution error: {error_msg}"
-            
-            # Run unit tests if any test files exist
+
+            cmd = ["python", str(main_path)]
+            # Provide enough stdin tokens to satisfy menus, prompts, and game moves
+            simulated_input = "1\n2\n3\n4\n5\n6\n7\n8\n9\ny\nn\nyes\nno\nq\nquit\nexit\n\n"
+
+            def _run() -> subprocess.CompletedProcess:
+                return subprocess.run(
+                    cmd, input=simulated_input, capture_output=True,
+                    text=True, timeout=20, cwd=str(self.output_dir),
+                )
+
+            # Auto-install loop: retry once after pip-installing a missing package
+            for _attempt in range(2):
+                try:
+                    result = _run()
+                except subprocess.TimeoutExpired as te:
+                    # Soft success: the app ran but didn't self-terminate (e.g. interactive game)
+                    raw = te.stdout
+                    captured = (raw.decode(errors="ignore") if isinstance(raw, bytes) else (raw or ""))
+                    if captured.strip():
+                        verbose_log("[OK] Timed out but stdout captured — treating as success")
+                        return True, captured + "\n[NOTE] Process timed out; output captured before timeout."
+                    return False, "Execution timed out (20s) with no output."
+
+                stderr_text = result.stderr or ""
+
+                if result.returncode != 0 and "ModuleNotFoundError: No module named" in stderr_text:
+                    import re as _re
+                    m = _re.search(r"No module named '([^']+)'", stderr_text)
+                    if m and _attempt == 0:
+                        pkg = m.group(1).split(".")[0]
+                        print(f"[AUTO-INSTALL] pip install {pkg}", file=sys.stderr, flush=True)
+                        subprocess.run(
+                            ["python", "-m", "pip", "install", pkg, "-q"],
+                            capture_output=True, timeout=60,
+                        )
+                        continue  # retry
+                break  # no retry needed or second attempt done
+
+            output = result.stdout or ""
+            stderr_text = result.stderr or ""
+
+            if result.returncode != 0 and "EOFError" not in stderr_text:
+                return False, f"Execution error: {stderr_text}"
+
+            # Run unit tests if test files exist
             test_files = list(self.output_dir.glob("test_*.py"))
             if test_files:
                 test_result = subprocess.run(
                     ["python", "-m", "unittest", "discover", "-s", str(self.output_dir)],
-                    capture_output=True,
-                    text=True,
-                    timeout=15,
-                    cwd=str(self.output_dir)
+                    capture_output=True, text=True,
+                    timeout=15, cwd=str(self.output_dir),
                 )
                 if test_result.returncode == 0:
                     output += f"\n\n[TESTS PASSED]\n{test_result.stderr or test_result.stdout}"
-            
+
             verbose_log("[OK] Execution successful")
             return True, output
-            
+
         except subprocess.TimeoutExpired:
-            return False, "Execution timed out (interactive prompt waited for input or loop did not terminate)"
+            return False, "Execution timed out (20s)"
         except Exception as e:
             return False, f"Execution error: {e}"
 

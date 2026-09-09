@@ -70,6 +70,8 @@ For EVERY file created or modified, provide the complete, compilable implementat
 Rules:
 - NEVER truncate code, omit methods, or use placeholders like `...` or `// todo`
 - Output the COMPLETE content for each file so it can be executed immediately
+- Use ONLY standard library modules (e.g. for Python: os, sys, json, re, math, datetime, unittest) without requiring uninstalled third-party packages (like graphviz, pandas, requests)
+- For diagrams, flowcharts, or visualizations, output Mermaid markdown syntax (`.md`), HTML/SVG, or clean ASCII flow diagrams rather than relying on external binaries
 - Strictly implement the task requirements provided in the user prompt
 - Produce practical, runnable code in the requested language
 - Always validate with test_tools.check_syntax when possible
