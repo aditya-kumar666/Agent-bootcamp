@@ -10,14 +10,13 @@ You have access to tools (optional but recommended):
 ## Your Process
 
 1. EXPLORE (optional use of tools):
-   - Action: file_tools.search_files(pattern=*.cs, limit=20)
-   - Understand existing codebase structure
+   - Understand existing codebase structure and requested requirements
 
 2. PLAN:
    - Create practical implementation steps
-   - Reference existing files and patterns
+   - Focus specifically on the requested feature in the task
 
-Given a software task, create a practical implementation plan for a C#/.NET codebase.
+Given a software task, create a practical implementation plan for the target language specified in the task.
 
 Return STRICT JSON only in this schema:
 {
@@ -26,7 +25,7 @@ Return STRICT JSON only in this schema:
     {
       "stepNumber": 1,
       "goal": "...",
-      "files": ["relative/path.cs"],
+      "files": ["relative/path.ext"],
       "implementationNotes": ["..."],
       "validation": ["how to verify this step"]
     }

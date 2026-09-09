@@ -90,7 +90,7 @@ class CSharpBuilder(ProjectBuilder):
             output_dir: Path to project output directory
         """
         super().__init__(output_dir)
-        self.project_name = "TodoApp"
+        self.project_name = self.output_dir.name or "App"
     
     def validate_environment(self) -> bool:
         """Check if .NET SDK is installed."""
@@ -231,14 +231,15 @@ class JavaBuilder(ProjectBuilder):
     
     def setup_project(self) -> bool:
         """Create pom.xml for the Java project."""
-        pom_content = """<?xml version="1.0" encoding="UTF-8"?>
+        proj_name = self.output_dir.name or "App"
+        pom_content = f"""<?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 
          http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
-    <groupId>com.todoapp</groupId>
-    <artifactId>TodoApp</artifactId>
+    <groupId>com.{proj_name.lower()}</groupId>
+    <artifactId>{proj_name}</artifactId>
     <version>1.0.0</version>
     <packaging>jar</packaging>
     
@@ -412,63 +413,80 @@ class PythonBuilder(ProjectBuilder):
     def execute(self) -> tuple[bool, str]:
         """Execute Python application."""
         try:
-            # Look for main.py
-            main_path = self.output_dir / "main.py"
-            if not main_path.exists():
-                # Try to auto-create main.py if Models and Services exist
-                models_path = self.output_dir / "Models" / "TodoItem.py"
-                services_path = self.output_dir / "Services" / "TodoService.py"
-                
-                if models_path.exists() and services_path.exists():
-                    # Auto-generate a demo script
-                    demo_script = '''import sys
-sys.path.insert(0, str(__file__).rsplit("/", 1)[0])
-
-from Services.TodoService import TodoService
-
-# Demo usage
-service = TodoService()
-
-# Add a todo
-todo = service.Add("Learn Python")
-print(f"Added Todo: {todo.Title} (ID: {todo.Id})")
-
-# Mark as done
-marked = service.MarkDone(todo.Id)
-print(f"Todo marked as done: {marked}")
-
-# Get all todos
-all_todos = service.GetAll()
-print("All Todo items:")
-for t in all_todos:
-    print(f"  - {t.Title} (Done: {t.IsDone})")
-'''
-                    main_path.write_text(demo_script, encoding="utf-8")
-                    verbose_log("[OK] Auto-generated main.py")
-                else:
-                    return False, "main.py not found and cannot auto-generate (missing Models/Services)"
+            main_path = None
             
-            verbose_log("\n[RUN] Executing Python application...")
+            # 1. Check standard conventions: main.py, app.py, __main__.py
+            for name in ["main.py", "app.py", "__main__.py"]:
+                candidate = self.output_dir / name
+                if candidate.exists():
+                    main_path = candidate
+                    break
+
+            # 2. Inspect Python files to find one with an entry point (__main__ block)
+            if not main_path:
+                py_files = [
+                    f for f in self.output_dir.rglob("*.py")
+                    if f.name != "__init__.py" and not f.name.startswith("test_")
+                ]
+                for f in py_files:
+                    try:
+                        content = f.read_text(encoding="utf-8", errors="ignore")
+                        if '__name__ == "__main__"' in content or "__name__ == '__main__'" in content:
+                            main_path = f
+                            break
+                    except Exception:
+                        pass
+
+                # 3. Fallback to top-level or any non-test Python file
+                if not main_path:
+                    top_level_py = [
+                        f for f in self.output_dir.glob("*.py")
+                        if f.name != "__init__.py" and not f.name.startswith("test_")
+                    ]
+                    if top_level_py:
+                        main_path = top_level_py[0]
+                    elif py_files:
+                        main_path = py_files[0]
+                    else:
+                        return False, "No executable Python files found in output directory"
             
+            verbose_log(f"\n[RUN] Executing Python application ({main_path.name})...")
+            
+            # Pass simulated stdin input so interactive prompt loops (e.g. input()) don't hang in CI/automated runs
+            simulated_input = "1\n2\n3\n4\n5\n6\n7\n8\n9\nq\nexit\n\n"
             result = subprocess.run(
                 ["python", str(main_path)],
+                input=simulated_input,
                 capture_output=True,
                 text=True,
-                timeout=30,
+                timeout=20,
                 cwd=str(self.output_dir)
             )
             
             output = result.stdout
-            if result.returncode != 0:
+            if result.returncode != 0 and "EOFError" not in (result.stderr or ""):
                 error_msg = result.stderr or "Unknown error"
                 print(f"[ERROR] Execution failed", file=sys.stderr)
                 return False, f"Execution error: {error_msg}"
+            
+            # Run unit tests if any test files exist
+            test_files = list(self.output_dir.glob("test_*.py"))
+            if test_files:
+                test_result = subprocess.run(
+                    ["python", "-m", "unittest", "discover", "-s", str(self.output_dir)],
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                    cwd=str(self.output_dir)
+                )
+                if test_result.returncode == 0:
+                    output += f"\n\n[TESTS PASSED]\n{test_result.stderr or test_result.stdout}"
             
             verbose_log("[OK] Execution successful")
             return True, output
             
         except subprocess.TimeoutExpired:
-            return False, "Execution timed out (30s)"
+            return False, "Execution timed out (interactive prompt waited for input or loop did not terminate)"
         except Exception as e:
             return False, f"Execution error: {e}"
 
@@ -503,7 +521,8 @@ class GoBuilder(ProjectBuilder):
     
     def setup_project(self) -> bool:
         """Create go.mod for the Go project."""
-        go_mod_content = """module todoapp
+        proj_name = self.output_dir.name or "app"
+        go_mod_content = f"""module {proj_name.lower()}
 
 go 1.21
 """
@@ -520,9 +539,10 @@ go 1.21
         """Build Go project."""
         try:
             verbose_log("\n[BUILD] Building Go project...")
+            proj_name = self.output_dir.name or "app"
             
             result = subprocess.run(
-                ["go", "build", "-o", "todoapp"],
+                ["go", "build", "-o", proj_name.lower()],
                 cwd=str(self.output_dir),
                 capture_output=True,
                 text=True,
@@ -548,7 +568,15 @@ go 1.21
         """Execute compiled Go application."""
         try:
             # Look for the compiled binary with different possible names
-            possible_names = ["todoapp", "todoapp.exe", "main", "main.exe"]
+            proj_name = self.output_dir.name or "app"
+            possible_names = [
+                proj_name.lower(),
+                f"{proj_name.lower()}.exe",
+                "app",
+                "app.exe",
+                "main",
+                "main.exe"
+            ]
             exe_path = None
             
             for name in possible_names:

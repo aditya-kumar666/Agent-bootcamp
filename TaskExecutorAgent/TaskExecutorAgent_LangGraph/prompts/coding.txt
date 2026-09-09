@@ -38,37 +38,39 @@ Use the same action format:
 ## Your Process
 
 1. EXPLORE (use tools):
-   - Action: file_tools.search_files(pattern=*.cs, limit=10)
-   - Action: file_tools.read_file(path=Models/ExistingModel.cs)
-   - Optionally: Action: mcp.github.search_repositories(query=...)
-   - Understand existing code structure, patterns, and requirements
+   - Understand requirements and code structure from task
 
 2. GENERATE:
-   - Create practical, compilable C# code
-   - Follow patterns from existing files
-   - Link to work items if using Azure DevOps
+   - Create practical, compilable code in the requested language
+   - Ensure a runnable entry point (e.g. main.py for Python, Program.cs for C#) is created
 
 3. VALIDATE (use tools):
-   - Action: file_tools.write_file(path=Models/NewModel.cs, content=...)
-   - Action: test_tools.check_syntax(file_path=Models/NewModel.cs)
+   - Action: file_tools.write_file(path="path/to/file.ext", content="<actual full code>")
+   - Action: test_tools.check_syntax(file_path="path/to/file.ext")
    - Verify syntax is correct
 
 Return output in this format:
 1) CHANGED_FILES:
-- path: short reason
+- relative/path/to/file: short reason
+
 2) CODE:
-```csharp
-// provide concrete compilable code snippets
+For EVERY file created or modified, provide the complete, compilable implementation in its own code block with a clear file path header:
+
+### File: `relative/path/to/file.ext`
+```<language>
+// Full, complete, runnable code for this file
 ```
+
 3) PATCH_SUMMARY:
 - bullet list of what was added/updated
+
 4) VALIDATION_NOTES:
 - how to compile/test quickly
 
 Rules:
-- Use tools to read existing code BEFORE generating new code
-- Produce practical C# code, not abstract advice
-- Use clear signatures and defensive validation
-- Keep solution minimal and compilable
+- NEVER truncate code, omit methods, or use placeholders like `...` or `// todo`
+- Output the COMPLETE content for each file so it can be executed immediately
+- Strictly implement the task requirements provided in the user prompt
+- Produce practical, runnable code in the requested language
 - Always validate with test_tools.check_syntax when possible
 - Check MCP tool availability before using (graceful fallback if unavailable)

@@ -82,27 +82,50 @@ class ToolExecutor:
         return None
 
     def _parse_react_args(self, args_str: str) -> Dict[str, Any]:
-        """Parse ReAct-style arguments.
+        """Parse ReAct-style arguments safely handling quotes, commas, and multi-line strings.
         
         Args:
-            args_str: String like "path=/tmp/file.py, limit=10"
+            args_str: String like 'path="app/file.py", content="code"'
             
         Returns:
             Dictionary of parsed arguments
         """
+        import ast
+        args_str = args_str.strip()
+        if not args_str:
+            return {}
+
+        # 1. Try AST parsing (safely evaluates strings, numbers, booleans, dicts)
+        try:
+            tree = ast.parse(f"call({args_str})", mode="eval")
+            if isinstance(tree.body, ast.Call):
+                args = {}
+                for kw in tree.body.keywords:
+                    try:
+                        args[kw.arg] = ast.literal_eval(kw.value)
+                    except Exception:
+                        args[kw.arg] = ast.unparse(kw.value) if hasattr(ast, "unparse") else str(kw.value)
+                if args:
+                    return args
+        except Exception:
+            pass
+
+        # 2. Fallback regex parser respecting quotes
         args = {}
-        for arg_pair in args_str.split(','):
-            if '=' in arg_pair:
-                key, val = arg_pair.split('=', 1)
-                key = key.strip()
+        pattern = re.compile(r'(\w+)\s*=\s*(?:"([^"\\]*(?:\\.[^"\\]*)*)"|\'([^\'\\]*(?:\\.[^\'\\]*)*)\'|([^,]+))')
+        for match in pattern.finditer(args_str):
+            key = match.group(1)
+            val = match.group(2) if match.group(2) is not None else (match.group(3) if match.group(3) is not None else match.group(4))
+            if val is not None:
                 val = val.strip()
-                # Try to convert to appropriate type
-                if val.lower() in ('true', 'false'):
-                    args[key] = val.lower() == 'true'
+                if val.lower() == 'true':
+                    args[key] = True
+                elif val.lower() == 'false':
+                    args[key] = False
                 elif val.isdigit():
                     args[key] = int(val)
                 else:
-                    args[key] = val.strip('"\'')
+                    args[key] = val
         return args
 
     def execute_tool(self, tool_name: str, **kwargs) -> str:

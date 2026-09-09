@@ -68,6 +68,10 @@ class FileToolsPlugin:
             if not self._validate_path(path):
                 return "DENIED_OUTSIDE_WORKSPACE"
             
+            trimmed = content.strip()
+            if not trimmed or trimmed in ("...", "None", "pass") or trimmed == "...":
+                return "ERROR_REJECTED: Cannot write placeholder ellipsis (...) to file. Provide complete implementation."
+            
             file_path = self.workspace_root / path
             file_path.parent.mkdir(parents=True, exist_ok=True)
             file_path.write_text(content, encoding="utf-8")

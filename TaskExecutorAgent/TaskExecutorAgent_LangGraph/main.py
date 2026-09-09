@@ -45,16 +45,16 @@ def _extract_file_blocks_from_output(coding_output: str) -> dict[str, str]:
     def _store_file(path: str, content: str) -> None:
         path = path.strip()
         content = content.strip()
-        if not path or not content:
+        if not path or not content or content == "...":
             return
         # If the same file is discovered multiple times, keep the longer block.
         existing = files.get(path, "")
         if len(content) >= len(existing):
             files[path] = content
 
-    # Pattern 1: "Code for `path/to/file.ext`" followed by any fenced code block
+    # Pattern 1: "### File: `path/to/file.ext`" or "Code for `path/to/file.ext`" followed by fenced code block
     p1 = re.compile(
-        r"Code for\s+`([^`]+)`(?:[^\n`]*)\n?\s*```[a-zA-Z0-9_+-]*\s*(.*?)```",
+        r"(?:###\s*)?(?:Code for\s+|File:\s*|File\s+)?\`?([a-zA-Z0-9_\-\.\/\\]+\.[a-zA-Z0-9]+)\`?(?:[^\n`]*)\n?\s*```[a-zA-Z0-9_+-]*\s*\n?(.*?)\n?```",
         re.DOTALL | re.IGNORECASE,
     )
     for m in p1.finditer(coding_output):
@@ -63,12 +63,11 @@ def _extract_file_blocks_from_output(coding_output: str) -> dict[str, str]:
         _store_file(rel, content)
 
     # Pattern 2: combined block with language comment headers:
-    # // path/file.ext, # path/file.ext, -- path/file.ext
-    # Only split on lines that look like file headers (contain path indicators)
+    # // path/file.ext, # path/file.ext, -- path/file.ext, # file.ext
     for combined in re.finditer(r"```[a-zA-Z0-9_+-]*\s*(.*?)```", coding_output, re.DOTALL | re.IGNORECASE):
         text = combined.group(1)
-        # Split only on comments that have file path patterns (// File:, # File:, or paths with /)
-        sections = re.split(r"\n\s*(?://|#|--)\s*(?:File:\s*)?([^\n]*?[/\\][^\n]*)\n", "\n" + text)
+        # Split on comments with file path/name indicators
+        sections = re.split(r"\n\s*(?://|#|--)\s*(?:File:\s*)?([a-zA-Z0-9_\-\.\/\\]+\.[a-zA-Z0-9]+)\n", "\n" + text)
         
         # Reconstruct sections with their headers
         for i in range(1, len(sections), 2):
@@ -90,8 +89,7 @@ def _sanitize_relative_output_path(raw_path: str) -> str:
     p = re.sub(r"^(file|path)\s*:\s*", "", p, flags=re.IGNORECASE)
     p = p.strip("`\"' ")
     p = p.lstrip("/")
-    p = re.sub(r"^generated_projects/todo_feature_project/", "", p, flags=re.IGNORECASE)
-    p = re.sub(r"^generated_projects/todo_feature_project/", "", p, flags=re.IGNORECASE)
+    p = re.sub(r"^generated_projects/[^/]+/", "", p, flags=re.IGNORECASE)
     # collapse accidental duplicate slashes
     p = re.sub(r"/{2,}", "/", p)
     if p.startswith("generated_projects/") or p.startswith("test_tools.") or p.startswith("file_tools."):
@@ -100,18 +98,12 @@ def _sanitize_relative_output_path(raw_path: str) -> str:
 
 
 def _is_complete_code_content(path: str, content: str) -> bool:
-    """Heuristic check to avoid materializing truncated code files (language-agnostic).
-    
-    Checks if code content appears complete by verifying:
-    - Content is not empty
-    - Braces/brackets are balanced
-    - Content ends with a closing brace (for files with code blocks)
-    """
+    """Heuristic check to avoid materializing truncated or placeholder code files."""
     text = content.strip()
-    if not text:
+    if not text or text in ("...", "pass", "None") or len(text) < 5:
         return False
     
-    # Check for balanced braces and brackets (works across languages)
+    # Check for balanced braces and brackets
     if text.count("{") != text.count("}"):
         return False
     if text.count("[") != text.count("]"):
@@ -119,9 +111,10 @@ def _is_complete_code_content(path: str, content: str) -> bool:
     if text.count("(") != text.count(")"):
         return False
     
-    # If file contains code blocks, it should end with a closing brace
-    if "{" in text and not text.rstrip().endswith(("}","};")):
-        return False
+    # Only enforce ending with closing brace on languages with brace-delimited top-level blocks (C#, Java, C++)
+    if path.lower().endswith((".cs", ".java", ".cpp", ".c", ".h")):
+        if "{" in text and not text.rstrip().endswith(("}", "};")):
+            return False
     
     return True
 
@@ -607,7 +600,7 @@ def print_memory_token_report(memory: RunMemory) -> None:
 def load_task_from_file(
     task_file_path: Path | str | None = None,
     lang_display: str = "C#/.NET",
-    output_project_dir: str = "generated_projects/todo_feature_project",
+    output_project_dir: str = "generated_projects/feature_project",
 ) -> str:
     """Load task description from a text file and interpolate placeholders if present.
     
@@ -665,7 +658,7 @@ def main(language: str = "csharp", task_file: str | Path | None = None):
     tool_registry = setup_tool_registry()
     verbose_log(f"[OK] Registered {len(tool_registry.list_tools())} tools")
 
-    output_project_dir = "generated_projects/todo_feature_project"
+    output_project_dir = "generated_projects/feature_project"
     
     # Map language to code hints
     language_hints = {
