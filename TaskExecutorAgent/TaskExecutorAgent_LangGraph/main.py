@@ -604,12 +604,51 @@ def print_memory_token_report(memory: RunMemory) -> None:
         print(f"- {buffer_name}: {token_count}")
 
 
-def main(language: str = "csharp"):
+def load_task_from_file(
+    task_file_path: Path | str | None = None,
+    lang_display: str = "C#/.NET",
+    output_project_dir: str = "generated_projects/todo_feature_project",
+) -> str:
+    """Load task description from a text file and interpolate placeholders if present.
+    
+    Args:
+        task_file_path: Path to the task text file (default: task.txt in project root)
+        lang_display: Human-readable language name for prompt interpolation
+        output_project_dir: Relative output project directory
+        
+    Returns:
+        Formatted task string
+    """
+    if task_file_path is None:
+        task_file_path = BASE_DIR / "task.txt"
+    else:
+        task_file_path = Path(task_file_path)
+        if not task_file_path.is_absolute():
+            task_file_path = BASE_DIR / task_file_path
+
+    if not task_file_path.exists():
+        raise FileNotFoundError(f"Task file not found: {task_file_path}")
+
+    content = task_file_path.read_text(encoding="utf-8").strip()
+    
+    # Interpolate template variables
+    format_kwargs = {
+        "lang_display": lang_display,
+        "output_project_dir": output_project_dir,
+    }
+    for key, val in format_kwargs.items():
+        content = content.replace(f"{{{key}}}", val)
+
+    return content
+
+
+def main(language: str = "csharp", task_file: str | Path | None = None):
     """Main entry point for the task executor.
     
     Args:
         language: Programming language for code generation (default: "csharp")
                  Supported: csharp, java, python, go
+        task_file: Optional path to a text file containing the task prompt (default: task.txt)
     """
     if not validate_environment():
         sys.exit(1)
@@ -637,34 +676,14 @@ def main(language: str = "csharp"):
     }
     lang_display = language_hints.get(language.lower(), language)
 
-    task = f"""Implement a practical {lang_display} feature in this repo.
-
-IMPORTANT OUTPUT LOCATION RULE:
-- Create all generated files ONLY under: {output_project_dir}
-- Do not write outside that folder.
-- Use file_tools.write_file for every created/updated file.
-
-Requested implementation:
-- Create a file Models/TodoItem with properties: Id (int), Title (string), IsDone (bool), CreatedAt (timestamp).
-- Create a service file Services/TodoService with methods:
-  1) Add(title) -> TodoItem
-  2) MarkDone(id) -> bool
-  3) GetAll() -> List/Array of TodoItems
-- Add validation: title must be non-empty and <= 100 chars.
-- Add a minimal demo usage snippet in the main entry point file.
-
-Path mapping requirement:
-- Models/TodoItem -> {output_project_dir}/Models/TodoItem (appropriate extension for {lang_display})
-- Services/TodoService -> {output_project_dir}/Services/TodoService (appropriate extension for {lang_display})
-- Main entry point -> {output_project_dir}/Main (appropriate extension for {lang_display})
-- Use file_tools.write_file for every created/updated file.
-- If code is shown in markdown output, include file paths clearly so they can be materialized.
-
-Acceptance criteria:
-- Compilable/runnable {lang_display} code
-- Clear method signatures
-- Handles missing id in MarkDone by returning false
-- Includes brief unit-test suggestions."""
+    # Load task from external file
+    task_path_resolved = task_file or (BASE_DIR / "task.txt")
+    verbose_log(f"Loading task from: {task_path_resolved}")
+    task = load_task_from_file(
+        task_file_path=task_file,
+        lang_display=lang_display,
+        output_project_dir=output_project_dir,
+    )
 
     verbose_log(f"Generated project directory: {output_project_dir}")
     output_dir_path = BASE_DIR / output_project_dir
@@ -789,28 +808,31 @@ if __name__ == "__main__":
         run_a2a_server(run_langgraph_workflow, host=host, port=port)
         sys.exit(0)
 
-    # Parse command-line arguments
-    language = "csharp"  # default
-    if len(sys.argv) > 1:
-        language = sys.argv[1]
-    
-    # Show usage info
-    if language in ["-h", "--help", "help"]:
-        print("\nMulti-Language Task Executor")
-        print("="*60)
-        print("\nUsage:")
-        print("  python main_with_tools.py [language]")
-        print("\nSupported languages:")
-        print("  csharp (default)  - Generate C#/.NET Todo app")
-        print("  java              - Generate Java Todo app (requires Maven)")
-        print("  python            - Generate Python Todo app")
-        print("  go                - Generate Go Todo app (requires Go SDK)")
-        print("\nExamples:")
-        print("  python main_with_tools.py              # Default C#")
-        print("  python main_with_tools.py java         # Java app")
-        print("  python main_with_tools.py python       # Python app")
-        print("  python main_with_tools.py go           # Go app")
-        print()
-        sys.exit(0)
-    
-    main(language=language)
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Multi-Language Task Executor",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""Examples:
+  python main.py                           # Default C# with task.txt
+  python main.py python                    # Python with task.txt
+  python main.py java -t my_task.txt       # Java with custom task file
+  python main.py go --task-file custom.txt # Go with custom task file
+""",
+    )
+    parser.add_argument(
+        "language",
+        nargs="?",
+        default="csharp",
+        help="Programming language for code generation (csharp, java, python, go). Default: csharp",
+    )
+    parser.add_argument(
+        "-t", "--task-file",
+        dest="task_file",
+        default=None,
+        help="Path to .txt file containing the task prompt (default: task.txt)",
+    )
+
+    args = parser.parse_args()
+    main(language=args.language, task_file=args.task_file)
+

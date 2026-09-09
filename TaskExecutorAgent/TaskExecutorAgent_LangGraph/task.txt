@@ -1,0 +1,28 @@
+Implement a practical {lang_display} feature in this repo.
+
+IMPORTANT OUTPUT LOCATION RULE:
+- Create all generated files ONLY under: {output_project_dir}
+- Do not write outside that folder.
+- Use file_tools.write_file for every created/updated file.
+
+Requested implementation:
+- Create a file Models/TodoItem with properties: Id (int), Title (string), IsDone (bool), CreatedAt (timestamp).
+- Create a service file Services/TodoService with methods:
+  1) Add(title) -> TodoItem
+  2) MarkDone(id) -> bool
+  3) GetAll() -> List/Array of TodoItems
+- Add validation: title must be non-empty and <= 100 chars.
+- Add a minimal demo usage snippet in the main entry point file.
+
+Path mapping requirement:
+- Models/TodoItem -> {output_project_dir}/Models/TodoItem (appropriate extension for {lang_display})
+- Services/TodoService -> {output_project_dir}/Services/TodoService (appropriate extension for {lang_display})
+- Main entry point -> {output_project_dir}/Main (appropriate extension for {lang_display})
+- Use file_tools.write_file for every created/updated file.
+- If code is shown in markdown output, include file paths clearly so they can be materialized.
+
+Acceptance criteria:
+- Compilable/runnable {lang_display} code
+- Clear method signatures
+- Handles missing id in MarkDone by returning false
+- Includes brief unit-test suggestions.
