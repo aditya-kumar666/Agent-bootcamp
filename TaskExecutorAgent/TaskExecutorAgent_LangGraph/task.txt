@@ -1,4 +1,4 @@
-Implement a practical {lang_display} feature in this repo.
+Implement a practical feature in this repo.
 
 IMPORTANT OUTPUT LOCATION RULE:
 - Create all generated files ONLY under: {output_project_dir}
@@ -22,7 +22,7 @@ Path mapping requirement:
 - If code is shown in markdown output, include file paths clearly so they can be materialized.
 
 Acceptance criteria:
-- Compilable/runnable {lang_display} code
+- Compilable/runnable code
 - Clear method signatures
 - Handles missing id in MarkDone by returning false
 - Includes brief unit-test suggestions.

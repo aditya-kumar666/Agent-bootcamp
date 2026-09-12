@@ -42,6 +42,8 @@ Use the same action format:
 
 2. GENERATE:
    - Create practical, compilable code in the requested language
+   - Treat the language explicitly identified in the task as authoritative; generate files only in that language
+   - Do not generate alternate-language implementations or project files for another language
    - Ensure a runnable entry point (e.g. main.py for Python, Program.cs for C#) is created
 
 3. VALIDATE (use tools):

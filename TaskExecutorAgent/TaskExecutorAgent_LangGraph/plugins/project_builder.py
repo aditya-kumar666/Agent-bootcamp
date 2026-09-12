@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 import sys
 import os
+import re
 
 
 def is_verbose_logging_enabled() -> bool:
@@ -91,6 +92,51 @@ class CSharpBuilder(ProjectBuilder):
         """
         super().__init__(output_dir)
         self.project_name = self.output_dir.name or "App"
+        self.target_framework = None
+
+    def _detect_target_framework(self) -> str | None:
+        """Select a target framework from installed .NET Core runtimes.
+
+        DOTNET_TARGET_FRAMEWORK may be set to a specific framework such as
+        ``net10.0``. Without an override, the highest installed
+        Microsoft.NETCore.App major/minor version is selected.
+        """
+        result = subprocess.run(
+            ["dotnet", "--list-runtimes"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode != 0:
+            return None
+
+        installed: dict[str, tuple[int, int, int]] = {}
+        pattern = re.compile(
+            r"^Microsoft\.NETCore\.App\s+(\d+)\.(\d+)\.(\d+)\s+\["
+        )
+        for line in result.stdout.splitlines():
+            match = pattern.match(line.strip())
+            if match:
+                major, minor, patch = map(int, match.groups())
+                framework = f"net{major}.{minor}"
+                version = (major, minor, patch)
+                if framework not in installed or version > installed[framework]:
+                    installed[framework] = version
+
+        if not installed:
+            return None
+
+        requested = os.getenv("DOTNET_TARGET_FRAMEWORK", "").strip().lower()
+        if requested:
+            if requested in installed:
+                return requested
+            available = ", ".join(sorted(installed))
+            raise RuntimeError(
+                f"DOTNET_TARGET_FRAMEWORK={requested} is not installed. "
+                f"Available .NET Core target frameworks: {available}"
+            )
+
+        return max(installed, key=lambda framework: installed[framework])
     
     def validate_environment(self) -> bool:
         """Check if .NET SDK is installed."""
@@ -108,9 +154,21 @@ class CSharpBuilder(ProjectBuilder):
                     print(f"        Reason: {detail}", file=sys.stderr)
                 print("        Fix: reinstall .NET SDK from https://dotnet.microsoft.com/download", file=sys.stderr)
                 return False
+            self.target_framework = self._detect_target_framework()
+            if not self.target_framework:
+                print(
+                    "[ERROR] No Microsoft.NETCore.App runtime was found. "
+                    "Install a .NET runtime or SDK.",
+                    file=sys.stderr,
+                )
+                return False
+            verbose_log(f"[OK] Selected .NET target framework: {self.target_framework}")
             return True
         except FileNotFoundError:
             print("[ERROR] 'dotnet' not found in PATH. Install .NET SDK from https://dotnet.microsoft.com/download", file=sys.stderr)
+            return False
+        except RuntimeError as e:
+            print(f"[ERROR] {e}", file=sys.stderr)
             return False
         except Exception as e:
             print(f"[ERROR] Failed to validate .NET: {e}", file=sys.stderr)
@@ -118,15 +176,24 @@ class CSharpBuilder(ProjectBuilder):
     
     def setup_project(self) -> bool:
         """Create .csproj file for the C# project."""
+        if not self.target_framework:
+            print("[ERROR] .NET target framework has not been selected.", file=sys.stderr)
+            return False
         csproj_content = """<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net9.0</TargetFramework>
+    <TargetFramework>{target_framework}</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
+  <ItemGroup>
+    <!-- Test sources may use optional frameworks such as NUnit. They are not
+         part of the executable build unless a dedicated test project exists. -->
+    <Compile Remove="**/*Tests.cs" />
+    <Compile Remove="**/*Test.cs" />
+  </ItemGroup>
 </Project>
-"""
+""".format(target_framework=self.target_framework)
         try:
             csproj_path = self.output_dir / f"{self.project_name}.csproj"
             csproj_path.write_text(csproj_content, encoding="utf-8")
@@ -167,8 +234,10 @@ class CSharpBuilder(ProjectBuilder):
     def execute(self) -> tuple[bool, str]:
         """Execute compiled C# application."""
         try:
+            if not self.target_framework:
+                return False, "No .NET target framework was selected"
             # Find the executable
-            exe_path = self.output_dir / "bin" / "Release" / "net9.0" / f"{self.project_name}.exe"
+            exe_path = self.output_dir / "bin" / "Release" / self.target_framework / f"{self.project_name}.exe"
             if not exe_path.exists():
                 return False, f"Executable not found at {exe_path}"
             

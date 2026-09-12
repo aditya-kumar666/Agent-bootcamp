@@ -1,4 +1,4 @@
-Implement a practical {lang_display} feature in this repo.
+Implement a practical feature in this repo.
 
 IMPORTANT OUTPUT LOCATION RULE:
 - Create all generated files ONLY under: {output_project_dir}
@@ -7,21 +7,21 @@ IMPORTANT OUTPUT LOCATION RULE:
 
 Requested implementation:
 - Analyze current project architecture and generate a workflow diagram and architecture analyzer.
-- Produce a runnable script using Python standard libraries ONLY (no external graphviz, no pip packages).
-- The script MUST write a complete Mermaid flowchart into architecture_diagram.md.
+- Produce a runnable application using only the selected language's standard library/runtime APIs (no external packages).
+- The application MUST write a complete Mermaid flowchart into architecture_diagram.md.
 
 CRITICAL CODE REQUIREMENTS:
-1. The main script (main.py or flow_diagram_generator.py) MUST have an `if __name__ == "__main__":` block.
-2. Inside that block, the script MUST:
+1. The entry point MUST use the selected language's conventional runnable entry-point file and syntax.
+2. Inside the entry point, the application MUST:
    a. Build the Mermaid diagram string (flowchart TD with all agent nodes and edges).
-   b. Open "architecture_diagram.md" for writing (using open(..., "w")).
+   b. Open "architecture_diagram.md" for writing using standard file APIs for the selected language.
    c. Write the complete Mermaid diagram to that file.
    d. Print "Mermaid diagram generated successfully." to stdout.
 3. The Mermaid diagram MUST include all 6 nodes: Planner, Coding, Review, Reflection, Recode, Evaluation.
-4. Use ONLY Python standard library modules (os, pathlib, textwrap, etc.). NO graphviz, NO matplotlib.
+4. Use only standard library/runtime features available in the selected language; do not require third-party packages.
 
 Acceptance criteria:
-- Compilable/runnable {lang_display} code using standard libraries only
+- Compilable/runnable code using standard libraries only
 - Accurately details the LangGraph agent nodes (Planner, Coding, Review, Reflection, Recode, Evaluation)
-- Running main.py produces a non-empty architecture_diagram.md containing a valid Mermaid flowchart block
+- Running the generated application produces a non-empty architecture_diagram.md containing a valid Mermaid flowchart block
 - Output includes a clean Mermaid diagram and summary report.

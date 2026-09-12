@@ -3,6 +3,7 @@
 from __future__ import annotations
 import os
 import sys
+import json
 from pathlib import Path
 from typing import TypedDict
 import re
@@ -119,7 +120,7 @@ def _is_complete_code_content(path: str, content: str) -> bool:
     return True
 
 
-def _materialize_files(extracted: dict, output_dir_path: Path) -> int:
+def _materialize_files(extracted: dict, output_dir_path: Path, language: str = "python") -> int:
     """Materialize extracted code files to disk.
     
     Args:
@@ -130,6 +131,12 @@ def _materialize_files(extracted: dict, output_dir_path: Path) -> int:
         Number of files successfully written
     """
     written = 0
+    allowed_extensions = {
+        "python": {".py", ".md", ".txt", ".json"},
+        "csharp": {".cs", ".md", ".txt", ".json"},
+        "java": {".java", ".md", ".txt", ".json"},
+        "go": {".go", ".md", ".txt", ".json"},
+    }.get(language, {".md", ".txt", ".json"})
     if extracted:
         verbose_log(f"\nDEBUG: Found {len(extracted)} extracted files")
         for orig_path, content in extracted.items():
@@ -138,6 +145,17 @@ def _materialize_files(extracted: dict, output_dir_path: Path) -> int:
             
             if not rel_path:
                 verbose_log("DEBUG:   Skipping (empty path)")
+                continue
+
+            if Path(rel_path).suffix.lower() not in allowed_extensions:
+                verbose_log(f"DEBUG:   Skipping file for another language: {rel_path}")
+                continue
+
+            # Project files are owned by the language-specific builder. A model
+            # generated .csproj can overwrite the selected target framework or
+            # add references to unavailable local test assemblies.
+            if rel_path.lower().endswith((".csproj", ".fsproj", ".vbproj", ".sln")):
+                verbose_log(f"DEBUG:   Skipping builder-managed project file: {rel_path}")
                 continue
             
             is_complete = _is_complete_code_content(rel_path, content)
@@ -160,7 +178,8 @@ def _materialize_files(extracted: dict, output_dir_path: Path) -> int:
 
 
 def _build_with_retry(builder, output_dir_path: Path, task: str, tool_registry: ToolRegistry,
-                       lang_display: str, max_retries: int = 3) -> tuple[bool, str]:
+                       lang_display: str, builder_language: str = "python",
+                       max_retries: int = 3) -> tuple[bool, str]:
     """Build and execute with automatic retry on error.
     
     When execution fails, feeds error back to coding agent for regeneration.
@@ -216,7 +235,7 @@ Please fix the above error and regenerate all files. Ensure:
                 
                 # Extract and materialize new files
                 extracted = _extract_file_blocks_from_output(regenerated_code)
-                written = _materialize_files(extracted, output_dir_path)
+                written = _materialize_files(extracted, output_dir_path, builder_language)
                 verbose_log(f"[OK] Regenerated and wrote {written} files")
                 
                 # Clean up build artifacts for next attempt
@@ -635,12 +654,57 @@ def load_task_from_file(
     return content
 
 
-def main(language: str = "csharp", task_file: str | Path | None = None):
+def infer_language_from_task(task: str) -> str:
+    """Backward-compatible local fallback when model selection is unavailable."""
+    return "python"
+
+
+def select_language_with_model(task: str) -> tuple[str, str]:
+    """Ask the LLM to select the implementation language from the full task.
+
+    Returns ``(language, reason)``. Python is the safe fallback if the model
+    is unavailable or returns invalid structured data.
+    """
+    supported = {"python", "csharp", "java", "go"}
+    aliases = {"c#": "csharp", "c sharp": "csharp", ".net": "csharp", "golang": "go"}
+    prompt = """You are a programming-language selection agent. Analyze the complete software task below.
+Determine whether the task explicitly names a programming language. Do not infer a non-Python language from generic types, filenames, or domain terminology.
+Supported values are exactly: python, csharp, java, go.
+If the task does not explicitly identify a language, language_explicit must be false and the language must be python.
+Do not choose a language merely because another language appears in an example filename.
+Return JSON only with this schema:
+{"language":"python|csharp|java|go","language_explicit":true|false,"reason":"brief explanation"}
+
+TASK:
+""" + task
+    try:
+        selector = PlannerAgent(PROMPTS_DIR)
+        response = selector.invoke(
+            "Select the target programming language. Return only the requested JSON schema.",
+            prompt,
+        ).strip()
+        response = re.sub(r"^```(?:json)?\s*|\s*```$", "", response, flags=re.IGNORECASE | re.DOTALL).strip()
+        data = json.loads(response)
+        language = str(data.get("language", "")).strip().lower()
+        language = aliases.get(language, language)
+        if language not in supported:
+            raise ValueError(f"Unsupported selected language: {language}")
+        language_explicit = data.get("language_explicit") is True
+        reason = str(data.get("reason", "Model-selected language"))
+        if not language_explicit:
+            return "python", f"No explicit language in task; defaulted to Python. Model reason: {reason}"
+        return language, reason
+    except Exception as ex:
+        verbose_log(f"[LANGUAGE_SELECTOR] Falling back to Python: {ex}")
+        return "python", f"Fallback because model language selection failed: {ex}"
+
+
+def main(language: str | None = None, task_file: str | Path | None = None):
     """Main entry point for the task executor.
     
     Args:
-        language: Programming language for code generation (default: "csharp")
-                 Supported: csharp, java, python, go
+        language: Deprecated optional override. If omitted, language is inferred
+                  from the task and defaults to Python.
         task_file: Optional path to a text file containing the task prompt (default: task.txt)
     """
     if not validate_environment():
@@ -659,19 +723,23 @@ def main(language: str = "csharp", task_file: str | Path | None = None):
     verbose_log(f"[OK] Registered {len(tool_registry.list_tools())} tools")
 
     output_project_dir = "generated_projects/feature_project"
-    
-    # Map language to code hints
+
     language_hints = {
         "csharp": "C#/.NET",
         "java": "Java",
         "python": "Python",
         "go": "Go",
     }
-    lang_display = language_hints.get(language.lower(), language)
-
     # Load task from external file
     task_path_resolved = task_file or (BASE_DIR / "task.txt")
     verbose_log(f"Loading task from: {task_path_resolved}")
+    raw_task_path = Path(task_file) if task_file else BASE_DIR / "task.txt"
+    if not raw_task_path.is_absolute():
+        raw_task_path = BASE_DIR / raw_task_path
+    raw_task = raw_task_path.read_text(encoding="utf-8").strip()
+    language, language_reason = select_language_with_model(raw_task)
+    print(f"[LANGUAGE] Selected {language}: {language_reason}", flush=True)
+    lang_display = language_hints[language]
     task = load_task_from_file(
         task_file_path=task_file,
         lang_display=lang_display,
@@ -692,7 +760,7 @@ def main(language: str = "csharp", task_file: str | Path | None = None):
 
     # Safety net: extract and materialize generated files
     extracted = _extract_file_blocks_from_output(final_state.get("code", ""))
-    _materialize_files(extracted, output_dir_path)
+    _materialize_files(extracted, output_dir_path, language)
 
     # Setup builder for the target language
     verbose_log(f"\nSetting up {lang_display} builder...")
@@ -702,27 +770,33 @@ def main(language: str = "csharp", task_file: str | Path | None = None):
         print(f"[ERROR] {e}", file=sys.stderr)
         sys.exit(1)
     
-    # Validate environment
-    if not builder.validate_environment():
-        print(f"[ERROR] {lang_display} environment validation failed", file=sys.stderr)
-        sys.exit(1)
-    
-    # Setup project structure
-    if not builder.setup_project():
-        print(f"[ERROR] Failed to setup {lang_display} project", file=sys.stderr)
-        sys.exit(1)
-    
-    # Build and execute with automatic retry on error
-    verbose_log(f"\nStarting {lang_display} build with error recovery...")
-    success, exec_output = _build_with_retry(
-        builder, output_dir_path, task, tool_registry, lang_display, max_retries=3
-    )
-    
-    execution_output = f"\n{'='*50}\n=== EXECUTION OUTPUT ===\n{'='*50}\n"
-    if success:
-        execution_output += f"[SUCCESS] Application executed successfully after retries:\n\n{exec_output}"
+    # Validate environment. Missing runtimes do not discard generated code.
+    runtime_available = builder.validate_environment()
+    if not runtime_available:
+        execution_output = (
+            f"\n[CODE GENERATED - NOT TESTED]\n"
+            f"{lang_display} runtime/build tools are not installed or available. "
+            f"Install the {lang_display} runtime/toolchain and run the generated project to test it."
+        )
+        print(execution_output)
     else:
-        execution_output += f"[FAILED] Application execution failed after all retry attempts:\n\n{exec_output}"
+        execution_output = ""
+    if runtime_available:
+        if not builder.setup_project():
+            print(f"[ERROR] Failed to setup {lang_display} project", file=sys.stderr)
+            sys.exit(1)
+
+        verbose_log(f"\nStarting {lang_display} build with error recovery...")
+        success, exec_output = _build_with_retry(
+            builder, output_dir_path, task, tool_registry, lang_display,
+            builder_language=language, max_retries=3
+        )
+
+        execution_output = f"\n{'='*50}\n=== EXECUTION OUTPUT ===\n{'='*50}\n"
+        if success:
+            execution_output += f"[SUCCESS] Application executed successfully after retries:\n\n{exec_output}"
+        else:
+            execution_output += f"[FAILED] Application execution failed after all retry attempts:\n\n{exec_output}"
 
     print("\n" + "="*50)
     print("=== PLANNER OUTPUT ===")
@@ -816,8 +890,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "language",
         nargs="?",
-        default="csharp",
-        help="Programming language for code generation (csharp, java, python, go). Default: csharp",
+        default=None,
+        help="Deprecated optional language override. Normally inferred from the task; defaults to Python.",
     )
     parser.add_argument(
         "-t", "--task-file",
