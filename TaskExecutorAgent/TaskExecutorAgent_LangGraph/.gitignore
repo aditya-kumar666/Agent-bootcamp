@@ -149,3 +149,4 @@ tmp/
 
 # Generated project outputs from tool-enabled runs
 generated_projects/
+data/chroma_db/
