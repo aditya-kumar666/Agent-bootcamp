@@ -20,9 +20,10 @@ from agents import (
 )
 from guardrails import build_context_snapshot_with_budget
 from memory.run_memory import RunMemory
-from plugins import FileToolsPlugin, TestToolsPlugin, ToolRegistry, BuilderFactory, MCPToolManager
+from plugins import FileToolsPlugin, TestToolsPlugin, ToolRegistry, BuilderFactory, MCPToolManager, RagToolsPlugin
 from observability import get_langfuse_client
-from a2a_adapter import run_a2a_server
+
+run_a2a_server = None
 
 BASE_DIR = Path(__file__).resolve().parent
 PROMPTS_DIR = BASE_DIR / "prompts"
@@ -37,6 +38,40 @@ def verbose_log(message: str) -> None:
     """Print non-essential logs only in verbose mode."""
     if is_verbose_logging_enabled():
         print(message, file=sys.stderr, flush=True)
+
+
+def _extract_rule_ids(text: str) -> list[str]:
+    """Extract explicit knowledge-base rule IDs from review output."""
+    return list(dict.fromkeys(re.findall(r"\[([A-Z]+(?:-[A-Z0-9]+)+-\d{2})\]", text or "")))
+
+
+def initialize_knowledge_base():
+    """Initialize the persistent RAG database and ingest the curated corpus."""
+    try:
+        from services import KnowledgeService
+
+        db_path = BASE_DIR / "data" / "chroma_db"
+        print(f"[RAG] Initializing ChromaDB: {db_path}", flush=True)
+        service = KnowledgeService(db_path)
+        corpus_path = BASE_DIR / "knowledge_base"
+        ingest_mode = os.getenv("AUTO_INGEST_KNOWLEDGE_BASE", "true").lower()
+        existing_count = service.collection.count()
+        if ingest_mode == "force" and corpus_path.exists():
+            print("[RAG] Force-ingesting knowledge base; embedding may take time on first run.", flush=True)
+            indexed = service.ingest_directory(corpus_path)
+            print(f"[RAG] Knowledge base ready: {indexed} chunks in {db_path}", flush=True)
+        elif ingest_mode == "true" and existing_count == 0 and corpus_path.exists():
+            print("[RAG] Knowledge base is empty; ingesting corpus. First run may download an embedding model.", flush=True)
+            indexed = service.ingest_directory(corpus_path)
+            print(f"[RAG] Knowledge base ready: {indexed} chunks in {db_path}", flush=True)
+        elif existing_count > 0:
+            print(f"[RAG] Knowledge database ready: {existing_count} existing chunks in {db_path}", flush=True)
+        else:
+            print(f"[RAG] Knowledge database ready: {db_path}", flush=True)
+        return service
+    except Exception as ex:
+        print(f"[WARN] Knowledge base unavailable: {ex}", file=sys.stderr, flush=True)
+        return None
 
 
 def _extract_file_blocks_from_output(coding_output: str) -> dict[str, str]:
@@ -69,7 +104,7 @@ def _extract_file_blocks_from_output(coding_output: str) -> dict[str, str]:
         text = combined.group(1)
         # Split on comments with file path/name indicators
         sections = re.split(r"\n\s*(?://|#|--)\s*(?:File:\s*)?([a-zA-Z0-9_\-\.\/\\]+\.[a-zA-Z0-9]+)\n", "\n" + text)
-        
+
         # Reconstruct sections with their headers
         for i in range(1, len(sections), 2):
             if i + 1 < len(sections):
@@ -103,7 +138,7 @@ def _is_complete_code_content(path: str, content: str) -> bool:
     text = content.strip()
     if not text or text in ("...", "pass", "None") or len(text) < 5:
         return False
-    
+
     # Check for balanced braces and brackets
     if text.count("{") != text.count("}"):
         return False
@@ -111,22 +146,22 @@ def _is_complete_code_content(path: str, content: str) -> bool:
         return False
     if text.count("(") != text.count(")"):
         return False
-    
+
     # Only enforce ending with closing brace on languages with brace-delimited top-level blocks (C#, Java, C++)
     if path.lower().endswith((".cs", ".java", ".cpp", ".c", ".h")):
         if "{" in text and not text.rstrip().endswith(("}", "};")):
             return False
-    
+
     return True
 
 
 def _materialize_files(extracted: dict, output_dir_path: Path, language: str = "python") -> int:
     """Materialize extracted code files to disk.
-    
+
     Args:
         extracted: Dict of {path: content} to write
         output_dir_path: Target directory
-        
+
     Returns:
         Number of files successfully written
     """
@@ -142,7 +177,7 @@ def _materialize_files(extracted: dict, output_dir_path: Path, language: str = "
         for orig_path, content in extracted.items():
             rel_path = _sanitize_relative_output_path(orig_path)
             verbose_log(f"DEBUG: Processing {orig_path} -> {rel_path}")
-            
+
             if not rel_path:
                 verbose_log("DEBUG:   Skipping (empty path)")
                 continue
@@ -157,14 +192,14 @@ def _materialize_files(extracted: dict, output_dir_path: Path, language: str = "
             if rel_path.lower().endswith((".csproj", ".fsproj", ".vbproj", ".sln")):
                 verbose_log(f"DEBUG:   Skipping builder-managed project file: {rel_path}")
                 continue
-            
+
             is_complete = _is_complete_code_content(rel_path, content)
             verbose_log(f"DEBUG:   Is complete: {is_complete}")
-            
+
             if not is_complete:
                 verbose_log("DEBUG:   Skipping (incomplete)")
                 continue
-            
+
             # Force all generated output under configured project directory
             target = output_dir_path / rel_path
             try:
@@ -181,9 +216,9 @@ def _build_with_retry(builder, output_dir_path: Path, task: str, tool_registry: 
                        lang_display: str, builder_language: str = "python",
                        max_retries: int = 3) -> tuple[bool, str]:
     """Build and execute with automatic retry on error.
-    
+
     When execution fails, feeds error back to coding agent for regeneration.
-    
+
     Args:
         builder: ProjectBuilder instance
         output_dir_path: Output directory path
@@ -191,31 +226,31 @@ def _build_with_retry(builder, output_dir_path: Path, task: str, tool_registry: 
         tool_registry: Tool registry for agent execution
         lang_display: Language display name for feedback
         max_retries: Maximum number of retry attempts
-        
+
     Returns:
         Tuple of (success: bool, output: str)
     """
     attempt = 0
     last_error = ""
-    
+
     while attempt < max_retries:
         attempt += 1
         verbose_log(f"\n[RETRY {attempt}/{max_retries}] Building and executing {lang_display} project...")
-        
+
         success, exec_output = builder.build_and_execute()
-        
+
         if success:
             verbose_log(f"[OK] Execution succeeded on attempt {attempt}")
             return True, exec_output
-        
+
         # Execution failed - capture error
         last_error = exec_output
         error_preview = (exec_output[:300] + "...") if len(exec_output) > 300 else exec_output
         print(f"[ERROR] Execution failed: {error_preview}", file=sys.stderr, flush=True)
-        
+
         if attempt < max_retries:
             verbose_log(f"\n[REGENERATE] Attempting to fix code (attempt {attempt + 1}/{max_retries})...")
-            
+
             # Create feedback-based coding task
             fix_task = f"""{task}
 
@@ -224,20 +259,20 @@ PREVIOUS EXECUTION ERROR (attempt {attempt}):
 
 Please fix the above error and regenerate all files. Ensure:
 1. The code handles all edge cases
-2. All imports are correct  
+2. All imports are correct
 3. No syntax errors exist
 4. The application can execute successfully"""
-            
+
             # Regenerate code with feedback
             try:
                 coding_agent = CodingAgent(PROMPTS_DIR, tool_registry)
                 regenerated_code = coding_agent.execute(fix_task, fix_task)
-                
+
                 # Extract and materialize new files
                 extracted = _extract_file_blocks_from_output(regenerated_code)
                 written = _materialize_files(extracted, output_dir_path, builder_language)
                 verbose_log(f"[OK] Regenerated and wrote {written} files")
-                
+
                 # Clean up build artifacts for next attempt
                 import shutil
                 for pattern in ["bin", "obj", "target", "dist", "__pycache__"]:
@@ -248,14 +283,14 @@ Please fix the above error and regenerate all files. Ensure:
                             verbose_log(f"[OK] Cleaned {pattern} directory")
                         except:
                             pass
-                
+
             except Exception as e:
                 print(f"[ERROR] Regeneration failed: {e}", file=sys.stderr, flush=True)
                 last_error = str(e)
         else:
             print(f"\n[FAILED] Max retries ({max_retries}) exceeded", file=sys.stderr, flush=True)
             break
-    
+
     return False, last_error
 
 
@@ -271,16 +306,16 @@ class GraphState(TypedDict, total=False):
 
 def setup_tool_registry() -> ToolRegistry:
     """Set up tool registry with FileTools and TestTools.
-    
+
     Returns:
         Configured ToolRegistry
     """
     registry = ToolRegistry()
-    
+
     # Initialize tool plugins
     file_tools = FileToolsPlugin(BASE_DIR)
     test_tools = TestToolsPlugin(BASE_DIR)
-    
+
     # Register FileTools
     registry.register(
         name="file_tools.read_file",
@@ -293,7 +328,7 @@ def setup_tool_registry() -> ToolRegistry:
             }
         }
     )
-    
+
     registry.register(
         name="file_tools.write_file",
         func=file_tools.write_file,
@@ -309,7 +344,7 @@ def setup_tool_registry() -> ToolRegistry:
             }
         }
     )
-    
+
     registry.register(
         name="file_tools.search_files",
         func=file_tools.search_files,
@@ -325,7 +360,7 @@ def setup_tool_registry() -> ToolRegistry:
             }
         }
     )
-    
+
     registry.register(
         name="file_tools.list_directory",
         func=file_tools.list_directory,
@@ -337,7 +372,7 @@ def setup_tool_registry() -> ToolRegistry:
             }
         }
     )
-    
+
     registry.register(
         name="file_tools.delete_file",
         func=file_tools.delete_file,
@@ -349,7 +384,7 @@ def setup_tool_registry() -> ToolRegistry:
             }
         }
     )
-    
+
     # Register TestTools
     registry.register(
         name="test_tools.run_tests",
@@ -366,7 +401,7 @@ def setup_tool_registry() -> ToolRegistry:
             }
         }
     )
-    
+
     registry.register(
         name="test_tools.run_unittest",
         func=test_tools.run_unittest,
@@ -382,7 +417,7 @@ def setup_tool_registry() -> ToolRegistry:
             }
         }
     )
-    
+
     registry.register(
         name="test_tools.check_syntax",
         func=test_tools.check_syntax,
@@ -394,7 +429,7 @@ def setup_tool_registry() -> ToolRegistry:
             }
         }
     )
-    
+
     registry.register(
         name="test_tools.run_linter",
         func=test_tools.run_linter,
@@ -410,28 +445,65 @@ def setup_tool_registry() -> ToolRegistry:
             }
         }
     )
-    
-    # Phase 3: Register MCP tools with verbose output
-    mcp_config_path = BASE_DIR / "mcp_servers.json"
-    try:
-        mcp_manager = MCPToolManager(mcp_config_path)
-        mcp_registered = mcp_manager.register_all(registry, verbose=is_verbose_logging_enabled())
-        if mcp_registered:
-            verbose_log(f"[OK] Registered {mcp_registered} MCP tools from {len(mcp_manager.get_registered_servers())} servers")
-            if mcp_manager.get_registered_servers():
-                verbose_log(f"     Servers: {', '.join(mcp_manager.get_registered_servers())}")
-    except Exception as ex:
-        print(f"[WARN] MCP tools not loaded: {ex}", file=sys.stderr)
+
+    # Phase 3/5: RAG startup is opt-in because Chroma may require native runtime setup.
+    if os.getenv("ENABLE_RAG", "false").lower() == "true":
+        try:
+            rag_service = initialize_knowledge_base()
+            if rag_service is None:
+                raise RuntimeError("KnowledgeService initialization failed")
+            rag_tools = RagToolsPlugin(service=rag_service, workspace_root=BASE_DIR)
+            registry.register(
+            name="rag_tools.search_standards",
+            func=rag_tools.search_standards,
+            description="Search engineering standards semantically and return cited rules",
+            parameters={
+                "query": {"type": "string", "description": "Natural-language standards question"},
+                "domain": {"type": "string", "description": "Optional domain filter, such as api_standards"},
+                "top_k": {"type": "integer", "description": "Maximum matching rules to return (default: 3)"},
+            },
+        )
+            registry.register(
+            name="rag_tools.get_guidelines_by_domain",
+            func=rag_tools.get_guidelines_by_domain,
+            description="Return all indexed guidelines for a knowledge-base domain",
+            parameters={"domain": {"type": "string", "description": "Knowledge-base domain name"}},
+        )
+            registry.register(
+            name="rag_tools.get_rule",
+            func=rag_tools.get_rule,
+            description="Retrieve one exact guideline by rule ID",
+            parameters={"rule_id": {"type": "string", "description": "Explicit rule ID, such as SEC-INJ-01"}},
+        )
+        except Exception as ex:
+            print(f"[WARN] RAG tools not loaded: {ex}", file=sys.stderr)
+    else:
+        print("[RAG] Disabled for this run. Set ENABLE_RAG=true after ChromaDB is working.", flush=True)
+
+    # MCP startup is opt-in because stdio servers can download or block at startup.
+    if os.getenv("ENABLE_MCP", "false").lower() == "true":
+        mcp_config_path = BASE_DIR / "mcp_servers.json"
+        try:
+            mcp_manager = MCPToolManager(mcp_config_path)
+            mcp_registered = mcp_manager.register_all(registry, verbose=is_verbose_logging_enabled())
+            if mcp_registered:
+                verbose_log(f"[OK] Registered {mcp_registered} MCP tools from {len(mcp_manager.get_registered_servers())} servers")
+                if mcp_manager.get_registered_servers():
+                    verbose_log(f"     Servers: {', '.join(mcp_manager.get_registered_servers())}")
+        except Exception as ex:
+            print(f"[WARN] MCP tools not loaded: {ex}", file=sys.stderr)
+    else:
+        print("[MCP] Disabled for this run. Set ENABLE_MCP=true to enable MCP server discovery.", flush=True)
 
     return registry
 
 
 def create_agents_with_tools(tool_registry: ToolRegistry):
     """Create agent instances with tool registry.
-    
+
     Args:
         tool_registry: ToolRegistry instance
-        
+
     Returns:
         Tuple of all agent instances
     """
@@ -440,7 +512,7 @@ def create_agents_with_tools(tool_registry: ToolRegistry):
     review = ReviewAgent(PROMPTS_DIR, tool_registry)
     reflection = ReflectionAgent(PROMPTS_DIR, tool_registry)
     evaluation = EvaluationAgent(PROMPTS_DIR, tool_registry)
-    
+
     return planner, coding, review, reflection, evaluation
 
 
@@ -545,17 +617,17 @@ def review_gate(state: GraphState) -> str:
 
 def build_graph(tool_registry: ToolRegistry):
     """Build the LangGraph with tool support.
-    
+
     Args:
         tool_registry: ToolRegistry instance
-        
+
     Returns:
         Compiled graph
     """
     planner, coding, review, reflection, evaluation = create_agents_with_tools(tool_registry)
-    
+
     graph = StateGraph(GraphState)
-    
+
     # Add nodes with closure over agents
     graph.add_node("planner", lambda state: planner_node(state, planner))
     graph.add_node("coding", lambda state: coding_node(state, coding))
@@ -574,7 +646,7 @@ def build_graph(tool_registry: ToolRegistry):
     graph.add_edge("reflection", "recode")
     graph.add_edge("recode", "review")
     graph.add_edge("evaluation", END)
-    
+
     return graph.compile()
 
 
@@ -584,10 +656,29 @@ def run_langgraph_workflow(task: str) -> GraphState:
     This is used by the A2A adapter and intentionally preserves the current
     internal orchestration model.
     """
-    tool_registry = setup_tool_registry()
-    app = build_graph(tool_registry)
-    initial: GraphState = {"task": task, "memory": RunMemory()}
-    return app.invoke(initial)
+    observer = get_langfuse_client()
+    with observer.trace(
+        name="sdlc_workflow",
+        input_data={"task": task[:200]},
+        metadata={"phase": "phase_5", "workflow": "planner-coding-review-reflection-evaluation"},
+    ) as trace:
+        tool_registry = setup_tool_registry()
+        app = build_graph(tool_registry)
+        initial: GraphState = {"task": task, "memory": RunMemory()}
+        final_state = app.invoke(initial)
+        if trace:
+            observer.span(
+                trace,
+                "workflow_summary",
+                input_data={"reflection_enabled": os.getenv("ENABLE_REFLECTION", "true")},
+                output={
+                    "review": final_state.get("review", "")[:2000],
+                    "reflection": final_state.get("reflection", "")[:2000],
+                    "evaluation": final_state.get("evaluation", "")[:2000],
+                    "rag_rule_ids": _extract_rule_ids(final_state.get("review", "")),
+                },
+            )
+        return final_state
 
 
 def validate_environment() -> bool:
@@ -622,12 +713,12 @@ def load_task_from_file(
     output_project_dir: str = "generated_projects/feature_project",
 ) -> str:
     """Load task description from a text file and interpolate placeholders if present.
-    
+
     Args:
         task_file_path: Path to the task text file (default: task.txt in project root)
         lang_display: Human-readable language name for prompt interpolation
         output_project_dir: Relative output project directory
-        
+
     Returns:
         Formatted task string
     """
@@ -642,7 +733,7 @@ def load_task_from_file(
         raise FileNotFoundError(f"Task file not found: {task_file_path}")
 
     content = task_file_path.read_text(encoding="utf-8").strip()
-    
+
     # Interpolate template variables
     format_kwargs = {
         "lang_display": lang_display,
@@ -701,7 +792,7 @@ TASK:
 
 def main(language: str | None = None, task_file: str | Path | None = None):
     """Main entry point for the task executor.
-    
+
     Args:
         language: Deprecated optional override. If omitted, language is inferred
                   from the task and defaults to Python.
@@ -718,9 +809,9 @@ def main(language: str | None = None, task_file: str | Path | None = None):
         print("[WARN] Langfuse disabled (no credentials or client unavailable)", flush=True)
 
     # Setup tools
-    verbose_log("Setting up tool registry...")
+    print("[STARTUP] Setting up tool registry...", flush=True)
     tool_registry = setup_tool_registry()
-    verbose_log(f"[OK] Registered {len(tool_registry.list_tools())} tools")
+    print(f"[STARTUP] Registered {len(tool_registry.list_tools())} tools", flush=True)
 
     output_project_dir = "generated_projects/feature_project"
 
@@ -737,6 +828,7 @@ def main(language: str | None = None, task_file: str | Path | None = None):
     if not raw_task_path.is_absolute():
         raw_task_path = BASE_DIR / raw_task_path
     raw_task = raw_task_path.read_text(encoding="utf-8").strip()
+    print(f"[STARTUP] Loaded task file: {raw_task_path.name}", flush=True)
     language, language_reason = select_language_with_model(raw_task)
     print(f"[LANGUAGE] Selected {language}: {language_reason}", flush=True)
     lang_display = language_hints[language]
@@ -756,7 +848,25 @@ def main(language: str | None = None, task_file: str | Path | None = None):
 
     app = build_graph(tool_registry)
     initial: GraphState = {"task": task, "memory": RunMemory()}
-    final_state = app.invoke(initial)
+    observer = get_langfuse_client()
+    with observer.trace(
+        name="sdlc_workflow",
+        input_data={"task": task[:200]},
+        metadata={"phase": "phase_5", "workflow": "planner-coding-review-reflection-evaluation"},
+    ) as trace:
+        final_state = app.invoke(initial)
+        if trace:
+            observer.span(
+                trace,
+                "workflow_summary",
+                input_data={"reflection_enabled": os.getenv("ENABLE_REFLECTION", "true")},
+                output={
+                    "review": final_state.get("review", "")[:2000],
+                    "reflection": final_state.get("reflection", "")[:2000],
+                    "evaluation": final_state.get("evaluation", "")[:2000],
+                    "rag_rule_ids": _extract_rule_ids(final_state.get("review", "")),
+                },
+            )
 
     # Safety net: extract and materialize generated files
     extracted = _extract_file_blocks_from_output(final_state.get("code", ""))
@@ -769,7 +879,7 @@ def main(language: str | None = None, task_file: str | Path | None = None):
     except ValueError as e:
         print(f"[ERROR] {e}", file=sys.stderr)
         sys.exit(1)
-    
+
     # Validate environment. Missing runtimes do not discard generated code.
     runtime_available = builder.validate_environment()
     if not runtime_available:
@@ -802,23 +912,23 @@ def main(language: str | None = None, task_file: str | Path | None = None):
     print("=== PLANNER OUTPUT ===")
     print("="*50)
     print(final_state.get("plan", ""))
-    
+
     print("\n" + "="*50)
     print("=== CODING OUTPUT ===")
     print("="*50)
     print(final_state.get("code", ""))
-    
+
     print("\n" + "="*50)
     print("=== REVIEW OUTPUT ===")
     print("="*50)
     print(final_state.get("review", ""))
-    
+
     if final_state.get("reflection"):
         print("\n" + "="*50)
         print("=== REFLECTION OUTPUT ===")
         print("="*50)
         print(final_state.get("reflection", ""))
-    
+
     print("\n" + "="*50)
     print("=== EVALUATION OUTPUT ===")
     print("="*50)
@@ -835,14 +945,14 @@ def main(language: str | None = None, task_file: str | Path | None = None):
     print("\n" + "="*50)
     print("=== SUMMARY ===")
     print("="*50)
-    
+
     # Show only generated source files (exclude build artifacts)
-    source_files = [f for f in existing 
+    source_files = [f for f in existing
                    if not any(x in f for x in ["bin", "obj", ".deps", ".pdb", "runtimeconfig"])]
     print(f"Generated files: {len(source_files)}")
     for fp in sorted(source_files):
         print(f"  ✓ {fp}")
-    
+
     # Show evaluation status
     eval_output = final_state.get("evaluation", "")
     if "Status: PASS" in eval_output:
@@ -856,7 +966,7 @@ def main(language: str | None = None, task_file: str | Path | None = None):
 
     if execution_output:
         print(execution_output)
-    
+
     # Flush Langfuse traces
     observer.flush()
     print("\n[OK] Langfuse traces flushed", flush=True)
@@ -864,10 +974,15 @@ def main(language: str | None = None, task_file: str | Path | None = None):
 
 if __name__ == "__main__":
     import sys
-    
+
     # Optional external A2A server mode. This does not change the internal
     # LangGraph GraphState orchestration; it only exposes it over HTTP/JSON.
     if len(sys.argv) > 1 and sys.argv[1] == "a2a-server":
+        try:
+            from a2a_adapter import run_a2a_server
+        except ImportError:
+            print("Error: A2A server dependencies are not installed. Install requirements.txt first.", file=sys.stderr)
+            sys.exit(1)
         if not validate_environment():
             sys.exit(1)
         host = os.getenv("A2A_HOST", "127.0.0.1")

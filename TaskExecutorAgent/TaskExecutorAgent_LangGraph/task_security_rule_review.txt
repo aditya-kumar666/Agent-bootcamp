@@ -1,0 +1,38 @@
+Implement a secure user lookup service that safely handles untrusted input.
+
+IMPORTANT OUTPUT LOCATION RULE:
+- Create all generated files ONLY under: {output_project_dir}
+- Do not write outside that folder.
+- Use file_tools.write_file for every created or updated file.
+
+Requested implementation:
+- Create a user lookup service with a method:
+  1) GetById(user_id) -> User or not-found result
+- Accept user_id from an external request or command-line input.
+- Store users in SQLite or the selected language's standard-library database API.
+- Add a repository/data-access layer and a service layer.
+- Add input validation for user_id.
+- Add unit tests for valid IDs, missing IDs, malformed IDs, and database failures.
+
+SECURITY SCENARIO:
+- The user ID comes from an external request or command-line argument and may contain malicious SQL-like input.
+- Use parameterized SQL queries or an equivalent safe query API.
+- Never concatenate or interpolate user-controlled input into SQL statements.
+- The code and tests must make the safe query behavior clear.
+
+Path mapping requirement:
+- Models/User -> {output_project_dir}/Models/User (appropriate extension for {lang_display})
+- Repositories/UserRepository -> {output_project_dir}/Repositories/UserRepository (appropriate extension for {lang_display})
+- Services/UserService -> {output_project_dir}/Services/UserService (appropriate extension for {lang_display})
+- Tests/UserServiceTests -> {output_project_dir}/Tests/UserServiceTests (appropriate extension for {lang_display})
+- Main entry point -> {output_project_dir}/Main (appropriate extension for {lang_display})
+- Use file_tools.write_file for every created or updated file.
+
+Acceptance criteria:
+- Compilable/runnable code
+- User input is validated before database access
+- SQL uses parameters rather than string interpolation
+- Missing users return a safe not-found result
+- Tests cover SQL-injection-like input such as: 1 OR 1=1
+- Review output must cite the relevant knowledge-base rule IDs discovered through RAG search
+- Final review output must include the RAG_RULE_IDS_USED marker

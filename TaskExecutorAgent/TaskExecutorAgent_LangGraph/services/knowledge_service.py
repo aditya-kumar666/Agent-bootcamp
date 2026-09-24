@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
+import math
 from pathlib import Path
 import re
 from typing import Any, Optional
@@ -23,6 +25,30 @@ class KnowledgeChunk:
     metadata: dict[str, str]
 
 
+class LocalHashEmbeddingFunction:
+    """Small deterministic offline embedding function with no native dependencies."""
+
+    def __init__(self, dimensions: int = 384) -> None:
+        self.dimensions = dimensions
+
+    def name(self) -> str:
+        """Return a stable Chroma embedding-function identity."""
+        return "local_hash_384"
+
+    def __call__(self, input: list[str]) -> list[list[float]]:
+        return [self._embed(text) for text in input]
+
+    def _embed(self, text: str) -> list[float]:
+        vector = [0.0] * self.dimensions
+        tokens = re.findall(r"[a-z0-9_]+", text.lower())
+        for token in tokens:
+            digest = hashlib.sha256(token.encode("utf-8")).digest()
+            index = int.from_bytes(digest[:4], "big") % self.dimensions
+            vector[index] += 1.0
+        magnitude = math.sqrt(sum(value * value for value in vector))
+        return [value / magnitude for value in vector] if magnitude else vector
+
+
 class KnowledgeService:
     """Ingest Markdown rules and query a persistent Chroma collection.
 
@@ -39,10 +65,12 @@ class KnowledgeService:
         self.persist_directory = Path(persist_directory)
         self.persist_directory.mkdir(parents=True, exist_ok=True)
         self.client = chromadb.PersistentClient(path=str(self.persist_directory))
-        options = {"name": collection_name}
-        if embedding_function is not None:
-            options["embedding_function"] = embedding_function
-        self.collection = self.client.get_or_create_collection(**options)
+        embedding_function = embedding_function or LocalHashEmbeddingFunction()
+        options = {"name": collection_name, "embedding_function": embedding_function}
+        try:
+            self.collection = self.client.get_collection(**options)
+        except Exception:
+            self.collection = self.client.create_collection(**options)
 
     def ingest_file(self, path: str | Path, *, replace: bool = True) -> int:
         """Parse and index one Markdown file, returning its chunk count."""

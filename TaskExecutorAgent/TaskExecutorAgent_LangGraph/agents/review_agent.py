@@ -1,6 +1,7 @@
 """Review agent for code review."""
 
 from .base_agent import BaseAgent
+import re
 
 
 class ReviewAgent(BaseAgent):
@@ -27,11 +28,13 @@ class ReviewAgent(BaseAgent):
             # Enhanced prompt with tools
             enhanced_prompt = f"{prompt}{tools_context}"
             
-            user_input = f"{prompt}\n\nTask: {task}\n\nInput: {input_context}"
+            user_input = f"Task: {task}\n\nInput: {input_context}"
             
             # Use tool-enabled invoke if tools are available
             if self.tool_registry:
-                return self.invoke_with_tools(enhanced_prompt, user_input, max_iterations=3)
+                output = self.invoke_with_tools(enhanced_prompt, user_input, max_iterations=4)
+                output = self._ensure_rule_citation_guidance(output)
+                return self._append_used_rule_ids(output)
             else:
                 return self.invoke(enhanced_prompt, user_input)
         except Exception as ex:
@@ -40,3 +43,21 @@ class ReviewAgent(BaseAgent):
     def get_fallback_response(self, task: str, ex: Exception) -> str:
         """Get fallback response when review fails."""
         return f"[OFFLINE_REVIEW] PASS_WITH_WARNINGS. Task: {task}. Input reviewed. Reason: {str(ex)}"
+
+    @staticmethod
+    def _ensure_rule_citation_guidance(output: str) -> str:
+        """Preserve a useful review while flagging missing RAG citations."""
+        if re.search(r"\[[A-Z]+(?:-[A-Z0-9]+)+-\d{2}\]", output):
+            return output
+        return (
+            f"{output.rstrip()}\n\n"
+            "CitationNote: No explicit knowledge-base rule ID was cited. "
+            "If standards were consulted, revise findings to include the exact returned rule ID."
+        )
+
+    def _append_used_rule_ids(self, output: str) -> str:
+        """Make the rules retrieved during this review visible in final output."""
+        if not self.last_tool_rule_ids:
+            return f"{output.rstrip()}\n\nRAG_RULE_IDS_USED: none"
+        ids = ", ".join(self.last_tool_rule_ids)
+        return f"{output.rstrip()}\n\nRAG_RULE_IDS_USED: {ids}"

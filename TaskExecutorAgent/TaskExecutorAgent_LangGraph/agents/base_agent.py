@@ -1,6 +1,7 @@
 """Base agent class for common functionality."""
 
 import os
+import re
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -29,6 +30,7 @@ class BaseAgent(ABC):
         self.prompts_dir = prompts_dir or Path(__file__).resolve().parent.parent / "prompts"
         self.tool_registry = tool_registry
         self._llm_instance = None
+        self.last_tool_rule_ids: list[str] = []
 
     @property
     def llm(self) -> ChatOpenAI:
@@ -124,6 +126,7 @@ class BaseAgent(ABC):
         from plugins import ToolExecutor
         
         executor = ToolExecutor(self.tool_registry)
+        self.last_tool_rule_ids = []
         messages = [
             HumanMessage(content=system_prompt),
             HumanMessage(content=user_input),
@@ -160,11 +163,19 @@ class BaseAgent(ABC):
                             trace,
                             f"tool_call.{tool_name}",
                             input_data=tool_args,
-                            output=None
+                            output=None,
                         )
                     
                     try:
                         tool_result = executor.execute_tool(tool_name, **tool_args)
+                        self._record_rule_ids(tool_result)
+                        if trace:
+                            observer.span(
+                                trace,
+                                f"tool_result.{tool_name}",
+                                input_data={"tool": tool_name, "rule_ids": self.last_tool_rule_ids},
+                                output=tool_result[:4000],
+                            )
                     except Exception as tool_ex:
                         tool_result = f"ERROR executing {tool_name}: {str(tool_ex)}"
                         if trace:
@@ -181,6 +192,12 @@ class BaseAgent(ABC):
             
             # Max iterations reached, return last response
             return response if 'response' in locals() else "Max iterations reached without final answer"
+
+    def _record_rule_ids(self, tool_result: str) -> None:
+        """Collect rule IDs returned by RAG tools for final review reporting."""
+        for rule_id in re.findall(r"\[([A-Z]+(?:-[A-Z0-9]+)+-\d{2})\]", tool_result):
+            if rule_id not in self.last_tool_rule_ids:
+                self.last_tool_rule_ids.append(rule_id)
 
     @abstractmethod
     def get_fallback_response(self, *args, **kwargs) -> str:
