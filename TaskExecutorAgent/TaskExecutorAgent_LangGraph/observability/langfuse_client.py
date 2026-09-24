@@ -26,6 +26,10 @@ class LangfuseObserver:
         self.enabled = False
         self.client = None
         self.current_trace_context = None
+
+        if os.getenv("ENABLE_LANGFUSE", "true").lower() != "true":
+            print("[INFO] Langfuse disabled by ENABLE_LANGFUSE", flush=True)
+            return
         
         if LANGFUSE_AVAILABLE and self._has_credentials():
             try:
