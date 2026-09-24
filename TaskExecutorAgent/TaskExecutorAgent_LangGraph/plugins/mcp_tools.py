@@ -73,8 +73,7 @@ class MCPToolManager:
             return 0
 
         try:
-            from mcp import ClientSession, StdioServerParameters
-            from mcp.client.stdio import stdio_client
+            from mcp import Client, StdioServerParameters
         except ImportError as exc:
             if verbose:
                 print(f"[WARN] MCP not available: {exc}", file=sys.stderr)
@@ -125,10 +124,11 @@ class MCPToolManager:
                 
                 params = StdioServerParameters(command=command, args=args, env=env if env else None)
 
-                async with stdio_client(params) as (read_stream, write_stream):
-                    async with ClientSession(read_stream, write_stream) as session:
-                        await session.initialize()
-                        tools_response = await session.list_tools()
+                timeout_seconds = float(server_config.get("startup_timeout", 15))
+                tools_response = await asyncio.wait_for(
+                    self._list_server_tools(params),
+                    timeout=timeout_seconds,
+                )
 
                 tool_count = 0
                 for tool in tools_response.tools:
@@ -138,7 +138,8 @@ class MCPToolManager:
                         func=self._make_sync_callable(server_name, tool.name),
                         description=tool.description or f"MCP tool {tool.name} from server {server_name}",
                         parameters=self._json_schema_to_registry_parameters(
-                            getattr(tool, "inputSchema", None)
+                            getattr(tool, "input_schema", None)
+                            or getattr(tool, "inputSchema", None)
                         ),
                     )
                     tool_count += 1
@@ -154,6 +155,14 @@ class MCPToolManager:
                 continue
 
         return registered
+
+    @staticmethod
+    async def _list_server_tools(params: Any) -> Any:
+        """Connect to an MCP v2 server and list its tools."""
+        from mcp import Client
+
+        async with Client(params, read_timeout_seconds=10) as client:
+            return await client.list_tools()
 
     async def _check_server_health(self, command: str, args: list, env: dict, verbose: bool) -> Tuple[bool, str]:
         """Quick health check on server availability.
@@ -219,8 +228,7 @@ class MCPToolManager:
             raise RuntimeError(f"MCP server config not found: {server_name}")
 
         try:
-            from mcp import ClientSession, StdioServerParameters
-            from mcp.client.stdio import stdio_client
+            from mcp import Client, StdioServerParameters
         except ImportError:
             return "ERROR: MCP not available"
 
@@ -231,11 +239,12 @@ class MCPToolManager:
                 env=server_config.get("env") or None,
             )
 
-            async with stdio_client(params) as (read_stream, write_stream):
-                async with ClientSession(read_stream, write_stream) as session:
-                    await session.initialize()
-                    result = await session.call_tool(tool_name, args)
+            async with Client(params, read_timeout_seconds=30) as client:
+                result = await client.call_tool(tool_name, args)
             
+            if getattr(result, "is_error", False):
+                return f"ERROR: MCP tool returned an error: {result}"
+
             content = getattr(result, "content", None) or []
             if not content:
                 return ""

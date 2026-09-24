@@ -13,13 +13,13 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 from plugins.file_tools import FileToolsPlugin
 from plugins.test_tools import TestToolsPlugin
 from plugins.project_builder import BuilderFactory
 
 
-mcp = FastMCP("local-agent-tools")
+mcp = MCPServer("local-agent-tools")
 file_tools = FileToolsPlugin(PROJECT_ROOT)
 test_tools = TestToolsPlugin(PROJECT_ROOT)
 
@@ -158,4 +158,4 @@ def build_and_execute_project(language: str, output_dir: str) -> str:
 
 
 if __name__ == "__main__":
-    mcp.run()
+    mcp.run(transport="stdio")

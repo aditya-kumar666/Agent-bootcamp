@@ -482,16 +482,24 @@ def setup_tool_registry() -> ToolRegistry:
 
     # MCP startup is opt-in because stdio servers can download or block at startup.
     if os.getenv("ENABLE_MCP", "false").lower() == "true":
+        print("[MCP] Enabled; discovering configured MCP servers...", flush=True)
         mcp_config_path = BASE_DIR / "mcp_servers.json"
         try:
             mcp_manager = MCPToolManager(mcp_config_path)
             mcp_registered = mcp_manager.register_all(registry, verbose=is_verbose_logging_enabled())
             if mcp_registered:
-                verbose_log(f"[OK] Registered {mcp_registered} MCP tools from {len(mcp_manager.get_registered_servers())} servers")
-                if mcp_manager.get_registered_servers():
-                    verbose_log(f"     Servers: {', '.join(mcp_manager.get_registered_servers())}")
+                registered_servers = mcp_manager.get_registered_servers()
+                print(
+                    f"[MCP] Ready: registered {mcp_registered} tools "
+                    f"from {len(registered_servers)} server(s).",
+                    flush=True,
+                )
+                if registered_servers:
+                    print(f"[MCP] Servers: {', '.join(registered_servers)}", flush=True)
+            else:
+                print("[MCP] Enabled, but no MCP tools were registered.", flush=True)
         except Exception as ex:
-            print(f"[WARN] MCP tools not loaded: {ex}", file=sys.stderr)
+            print(f"[MCP] Failed to load MCP tools: {ex}", file=sys.stderr, flush=True)
     else:
         print("[MCP] Disabled for this run. Set ENABLE_MCP=true to enable MCP server discovery.", flush=True)
 
